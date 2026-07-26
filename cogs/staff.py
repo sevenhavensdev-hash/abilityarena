@@ -203,7 +203,7 @@ class Staff(commands.Cog, name="Staff"):
         user: discord.Member,
         elo: int,
     ):
-        if elo < 0 or elo > 9999:
+        if elo < 0 or elo > 3000:
             return await interaction.response.send_message(
                 "❌ Elo must be between 0 and 9999.", ephemeral=True
             )
