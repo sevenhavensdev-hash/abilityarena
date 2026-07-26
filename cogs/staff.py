@@ -27,12 +27,13 @@ def _is_staff(interaction: discord.Interaction) -> bool:
 
 
 def _is_admin(interaction: discord.Interaction) -> bool:
-    admin_role_ids_raw = os.getenv("ADMIN_ROLE_IDS", "")
-    admin_role_ids = [rid.strip() for rid in admin_role_ids_raw.split(",") if rid.strip()]
+    # Support both ADMIN_ROLE_IDS (comma-separated) and the old ADMIN_ROLE_ID (single)
+    raw = os.getenv("ADMIN_ROLE_IDS") or os.getenv("ADMIN_ROLE_ID", "")
+    admin_role_ids = {rid.strip() for rid in raw.split(",") if rid.strip()}
     if not admin_role_ids:
         return False
     user_role_ids = {str(r.id) for r in interaction.user.roles}
-    return bool(user_role_ids & set(admin_role_ids))
+    return bool(user_role_ids & admin_role_ids)
 
 
 def staff_check():
