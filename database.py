@@ -130,6 +130,7 @@ class Database:
     async def update_player_elo(
         self, discord_id: str, new_elo: int, won: bool
     ):
+        new_elo = min(3000, max(0, new_elo))  # hard cap: 0–3000
         async with self._lock:
             if won:
                 await self._db.execute(
