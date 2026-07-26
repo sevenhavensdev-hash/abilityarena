@@ -30,6 +30,14 @@ class Database:
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA foreign_keys=ON")
         await self._create_tables()
+        # Migrate existing databases that pre-date the dispute_count column
+        try:
+            await self._db.execute(
+                "ALTER TABLE matches ADD COLUMN dispute_count INTEGER NOT NULL DEFAULT 0"
+            )
+            log.info("Migrated matches table: added dispute_count column.")
+        except Exception:
+            pass  # Column already exists
         await self._db.commit()
         log.info("Database initialised at %s", DB_PATH)
 
@@ -71,6 +79,7 @@ class Database:
                 challenger_elo_after  INTEGER,
                 opponent_elo_after    INTEGER,
                 elo_changed         INTEGER NOT NULL DEFAULT 0,
+                dispute_count       INTEGER NOT NULL DEFAULT 0,
                 forum_channel_id    TEXT,
                 forum_thread_id     TEXT,
                 forum_message_id    TEXT,
@@ -257,13 +266,25 @@ class Database:
             await self._db.commit()
         return True
 
-    async def dispute_result(self, match_id: str, disputer_id: str):
+    async def dispute_result(self, match_id: str, disputer_id: str) -> int:
+        """Increment dispute count. Sets status to 'disputed' only on the 2nd dispute.
+        Returns the new dispute_count."""
         async with self._lock:
             await self._db.execute(
-                "UPDATE matches SET status = 'disputed' WHERE match_id = ?",
+                "UPDATE matches SET dispute_count = dispute_count + 1 WHERE match_id = ?",
                 (match_id,),
             )
             await self._db.commit()
+        match = await self.get_match(match_id)
+        count = match["dispute_count"]
+        if count >= 2:
+            async with self._lock:
+                await self._db.execute(
+                    "UPDATE matches SET status = 'disputed' WHERE match_id = ?",
+                    (match_id,),
+                )
+                await self._db.commit()
+        return count
 
     async def apply_elo(
         self,
