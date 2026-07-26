@@ -205,7 +205,7 @@ class Staff(commands.Cog, name="Staff"):
     ):
         if elo < 0 or elo > 3000:
             return await interaction.response.send_message(
-                "❌ Elo must be between 0 and 9999.", ephemeral=True
+                "❌ Elo must be between 0 and 3000.", ephemeral=True
             )
         await self.bot.db.get_or_create_player(str(user.id))
         async with self.bot.db._lock:
