@@ -133,9 +133,11 @@ class ChallengeModal(discord.ui.Modal, title="⚔️ Create a Duel Challenge"):
                 "❌ Failed to create challenge. Please try again.", ephemeral=True
             )
 
+        thread_link = f"\n📌 View your match: <#{match['forum_thread_id']}>" if match["forum_thread_id"] else ""
         await interaction.followup.send(
             f"✅ Challenge created! Match ID: **#{match['match_id']}**\n"
-            f"A forum post has been created and {opponent_member.mention} has been notified.",
+            f"A forum post has been created and {opponent_member.mention} has been notified."
+            f"{thread_link}",
             ephemeral=True,
         )
 
