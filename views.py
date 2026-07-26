@@ -460,6 +460,20 @@ class ConfirmResultView(discord.ui.View):
         if logger:
             await logger.log_result_confirmed(interaction.guild, match, interaction.user)
 
+        # Update the confirm/dispute message to show who confirmed and remove buttons
+        try:
+            confirmed_embed = interaction.message.embeds[0] if interaction.message.embeds else None
+            if confirmed_embed:
+                confirmed_embed.colour = discord.Color.green()
+                confirmed_embed.set_footer(text=f"✅ Confirmed by {interaction.user.display_name}")
+            await interaction.message.edit(
+                content=f"✅ {interaction.user.mention} confirmed the result. Elo has been updated!",
+                embed=confirmed_embed,
+                view=discord.ui.View(),  # removes all buttons
+            )
+        except Exception:
+            pass
+
         await interaction.followup.send("✅ Result confirmed. Elo has been updated.", ephemeral=True)
 
     @discord.ui.button(
