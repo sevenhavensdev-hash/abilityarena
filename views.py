@@ -481,6 +481,11 @@ class ConfirmResultView(discord.ui.View):
             return await interaction.response.send_message(
                 "❌ Only match participants can dispute results.", ephemeral=True
             )
+        if user_id == match["reporter_id"]:
+            return await interaction.response.send_message(
+                "❌ You cannot dispute your own result report. Only the other player can dispute it.",
+                ephemeral=True,
+            )
         if match["status"] != "awaiting_confirm":
             return await interaction.response.send_message(
                 f"❌ Nothing to dispute. Status: {STATUS_LABELS.get(match['status'], match['status'])}",
