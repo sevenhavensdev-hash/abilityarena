@@ -27,11 +27,12 @@ def _is_staff(interaction: discord.Interaction) -> bool:
 
 
 def _is_admin(interaction: discord.Interaction) -> bool:
-    admin_role_id = os.getenv("ADMIN_ROLE_ID")
-    if not admin_role_id:
+    admin_role_ids_raw = os.getenv("ADMIN_ROLE_IDS", "")
+    admin_role_ids = [rid.strip() for rid in admin_role_ids_raw.split(",") if rid.strip()]
+    if not admin_role_ids:
         return False
-    role = interaction.guild.get_role(int(admin_role_id))
-    return role is not None and role in interaction.user.roles
+    user_role_ids = {str(r.id) for r in interaction.user.roles}
+    return bool(user_role_ids & set(admin_role_ids))
 
 
 def staff_check():
