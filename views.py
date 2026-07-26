@@ -44,7 +44,7 @@ def _logger(interaction: discord.Interaction):
 # ============================================================
 
 class ChallengeModal(discord.ui.Modal, title="⚔️ Create a Duel Challenge"):
-    """Shown when a user clicks Create Challenge."""
+    """Shown after the user picks a region from the dropdown."""
 
     challenger_roblox = discord.ui.TextInput(
         label="Your Roblox Username",
@@ -61,11 +61,10 @@ class ChallengeModal(discord.ui.Modal, title="⚔️ Create a Duel Challenge"):
         placeholder="Right-click their name → Copy User ID",
         max_length=30,
     )
-    region = discord.ui.TextInput(
-        label="Region",
-        placeholder="Asia / North America / Europe / etc.",
-        max_length=30,
-    )
+
+    def __init__(self, region: str):
+        super().__init__()
+        self.region = region
 
     async def on_submit(self, interaction: discord.Interaction):
         bot: DuelBot = interaction.client
@@ -73,21 +72,8 @@ class ChallengeModal(discord.ui.Modal, title="⚔️ Create a Duel Challenge"):
 
         challenger_roblox = self.challenger_roblox.value.strip()
         opponent_roblox   = self.opponent_roblox.value.strip()
-        region_raw        = self.region.value.strip()
+        matched_region    = self.region  # already validated by the select
         opponent_id_raw   = self.opponent_discord.value.strip()
-
-        # ── Validate region ──────────────────────────────────────
-        matched_region = None
-        for r in REGIONS:
-            if r.lower() == region_raw.lower():
-                matched_region = r
-                break
-        if matched_region is None:
-            valid = ", ".join(REGIONS)
-            return await interaction.response.send_message(
-                f"❌ Invalid region **{region_raw}**.\nValid options: {valid}",
-                ephemeral=True,
-            )
 
         # ── Validate opponent Discord ID ─────────────────────────
         try:
@@ -313,6 +299,25 @@ class StaffOverrideModal(discord.ui.Modal, title="🔧 Staff Override"):
 # PERSISTENT VIEWS
 # ============================================================
 
+class RegionSelectView(discord.ui.View):
+    """Ephemeral region picker shown before the challenge modal."""
+
+    def __init__(self):
+        super().__init__(timeout=120)
+
+    @discord.ui.select(
+        placeholder="Choose your region…",
+        custom_id="region_select_dropdown",
+        options=[discord.SelectOption(label=r, value=r) for r in REGIONS],
+    )
+    async def region_select(
+        self, interaction: discord.Interaction, select: discord.ui.Select
+    ):
+        region = select.values[0]
+        await interaction.response.send_modal(ChallengeModal(region=region))
+        self.stop()
+
+
 class CreateChallengeView(discord.ui.View):
     """Permanent view on the challenge message. Survives restarts."""
 
@@ -327,7 +332,11 @@ class CreateChallengeView(discord.ui.View):
     async def create_challenge(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
-        await interaction.response.send_modal(ChallengeModal())
+        await interaction.response.send_message(
+            "📍 Please select your region to continue:",
+            view=RegionSelectView(),
+            ephemeral=True,
+        )
 
 
 # ------------------------------------------------------------------
