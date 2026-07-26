@@ -41,7 +41,7 @@ class Elo(commands.Cog, name="Elo"):
 
         elo_change = max(20, min(40, 30 + bonus))
 
-        new_winner = winner_elo + elo_change
+        new_winner = min(3000, winner_elo + elo_change)
         new_loser  = max(100, loser_elo - elo_change)
 
         return new_winner, new_loser
