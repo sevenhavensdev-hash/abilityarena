@@ -19,6 +19,9 @@ log = logging.getLogger("cogs.staff")
 
 
 def _is_staff(interaction: discord.Interaction) -> bool:
+    # Anyone with Discord administrator permission is automatically staff
+    if interaction.user.guild_permissions.administrator:
+        return True
     staff_role_id = os.getenv("STAFF_ROLE_ID")
     if not staff_role_id:
         return False
@@ -27,6 +30,9 @@ def _is_staff(interaction: discord.Interaction) -> bool:
 
 
 def _is_admin(interaction: discord.Interaction) -> bool:
+    # Administrators are always admins
+    if interaction.user.guild_permissions.administrator:
+        return True
     # Support both ADMIN_ROLE_IDS (comma-separated) and the old ADMIN_ROLE_ID (single)
     raw = os.getenv("ADMIN_ROLE_IDS") or os.getenv("ADMIN_ROLE_ID", "")
     admin_role_ids = {rid.strip() for rid in raw.split(",") if rid.strip()}
@@ -133,18 +139,14 @@ class Staff(commands.Cog, name="Staff"):
     # ------------------------------------------------------------------
     @app_commands.command(
         name="cancelm",
-        description="[Staff] Cancel any match by ID.",
+        description="[Staff] Cancel a match.",
     )
-    @app_commands.describe(
-        match_id="The Match ID (without #)",
-        reason="Reason for cancellation",
-    )
+    @app_commands.describe(match_id="The Match ID to cancel (without #)")
     @staff_check()
-    async def cancel_match(
+    async def cancelm(
         self,
         interaction: discord.Interaction,
         match_id: str,
-        reason: str = "Cancelled by staff",
     ):
         match_id = match_id.upper().lstrip("#")
         match = await self.bot.db.get_match(match_id)
@@ -154,20 +156,24 @@ class Staff(commands.Cog, name="Staff"):
             )
         if match["status"] in ("completed", "cancelled"):
             return await interaction.response.send_message(
-                "❌ Match is already completed or cancelled.", ephemeral=True
+                f"❌ Match **#{match_id}** is already {match['status']}.", ephemeral=True
             )
 
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await self.bot.db.cancel_match(match_id, cancelled_by=str(interaction.user.id), reason=reason)
-        match = await self.bot.db.get_match(match_id)
 
-        matches_cog = self.bot.get_cog("Matches")
-        if matches_cog:
-            await matches_cog.update_forum_post(match)
+        await self.bot.db.cancel_match(match_id)
 
         logger = self.bot.get_cog("Logging")
         if logger:
-            await logger.log_match_cancelled(interaction.guild, match, interaction.user)
+            await logger.log_raw(
+                interaction.guild,
+                title="❌ Match Cancelled",
+                fields=[
+                    ("Match ID", f"#{match_id}", True),
+                    ("Cancelled By", interaction.user.mention, True),
+                ],
+                color=discord.Color.red(),
+            )
 
         await interaction.followup.send(
             f"✅ Match **#{match_id}** has been cancelled.", ephemeral=True
@@ -179,10 +185,11 @@ class Staff(commands.Cog, name="Staff"):
         description="[Staff] Re-post the permanent challenge message.",
     )
     @staff_check()
-    async def force_post(self, interaction: discord.Interaction):
+    async def forcepost(
+        self,
+        interaction: discord.Interaction,
+    ):
         await interaction.response.defer(ephemeral=True, thinking=True)
-        # Delete old message ID so ensure_challenge_message creates a fresh one
-        await self.bot.db.set_config("challenge_message_id", "0")
         challenges_cog = self.bot.get_cog("Challenges")
         if challenges_cog:
             await challenges_cog.ensure_challenge_message()
