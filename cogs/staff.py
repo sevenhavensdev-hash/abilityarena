@@ -26,12 +26,32 @@ def _is_staff(interaction: discord.Interaction) -> bool:
     return role is not None and role in interaction.user.roles
 
 
+def _is_admin(interaction: discord.Interaction) -> bool:
+    admin_role_id = os.getenv("ADMIN_ROLE_ID")
+    if not admin_role_id:
+        return False
+    role = interaction.guild.get_role(int(admin_role_id))
+    return role is not None and role in interaction.user.roles
+
+
 def staff_check():
     """app_commands check decorator for staff-only commands."""
     async def predicate(interaction: discord.Interaction) -> bool:
         if not _is_staff(interaction):
             await interaction.response.send_message(
                 "❌ You need the Staff role to use this command.", ephemeral=True
+            )
+            return False
+        return True
+    return app_commands.check(predicate)
+
+
+def admin_check():
+    """app_commands check decorator for admin-only commands."""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if not _is_admin(interaction):
+            await interaction.response.send_message(
+                "❌ You need the Admin role to use this command.", ephemeral=True
             )
             return False
         return True
@@ -171,10 +191,10 @@ class Staff(commands.Cog, name="Staff"):
     # ------------------------------------------------------------------
     @app_commands.command(
         name="setelo",
-        description="[Staff] Manually set a player's Elo rating.",
+        description="[Admin] Manually set a player's Elo rating.",
     )
     @app_commands.describe(user="The Discord member", elo="The new Elo value")
-    @staff_check()
+    @admin_check()
     async def set_elo(
         self,
         interaction: discord.Interaction,
