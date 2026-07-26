@@ -518,20 +518,65 @@ class ConfirmResultView(discord.ui.View):
             )
 
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await bot.db.dispute_result(match["match_id"], disputer_id=user_id)
+        dispute_count = await bot.db.dispute_result(match["match_id"], disputer_id=user_id)
         match = await bot.db.get_match(match["match_id"])
 
-        matches_cog = bot.get_cog("Matches")
-        if matches_cog:
-            await matches_cog.update_forum_post(match)
+        if dispute_count == 1:
+            # First dispute — warn and keep buttons active
+            try:
+                await interaction.message.edit(
+                    content=(
+                        f"⚠️ {interaction.user.mention} disputed the result once.\n"
+                        f"**If you dispute again, staff will be called in to review.**\n"
+                        f"The other player can still confirm if this was a mistake."
+                    ),
+                    view=ConfirmResultView(),
+                )
+            except Exception:
+                pass
+            await interaction.followup.send(
+                "⚠️ First dispute recorded. Dispute once more to escalate to staff, "
+                "or the other player can still confirm the result.",
+                ephemeral=True,
+            )
+        else:
+            # Second dispute — finalize and ping staff
+            matches_cog = bot.get_cog("Matches")
+            if matches_cog:
+                await matches_cog.update_forum_post(match)
 
-        logger = _logger(interaction)
-        if logger:
-            await logger.log_result_disputed(interaction.guild, match, interaction.user)
+            staff_role_id = os.getenv("STAFF_ROLE_ID")
+            staff_mention = f"<@&{staff_role_id}>" if staff_role_id else "Staff"
+            try:
+                thread_id = match["forum_thread_id"]
+                if thread_id:
+                    thread = bot.get_channel(int(thread_id)) or await bot.fetch_channel(int(thread_id))
+                    await thread.send(
+                        f"{staff_mention} — Match **#{match['match_id']}** has been disputed twice. "
+                        f"A staff override is required."
+                    )
+            except Exception:
+                pass
 
-        await interaction.followup.send(
-            "⚠️ Result disputed. Staff will review this match.", ephemeral=True
-        )
+            try:
+                await interaction.message.edit(
+                    content=(
+                        f"🔴 {interaction.user.mention} has disputed this result a second time. "
+                        f"Staff have been notified."
+                    ),
+                    view=discord.ui.View(),  # remove buttons
+                )
+            except Exception:
+                pass
+
+            logger = _logger(interaction)
+            if logger:
+                await logger.log_result_disputed(interaction.guild, match, interaction.user)
+
+            await interaction.followup.send(
+                "🔴 Result disputed twice. Staff have been pinged to review this match.",
+                ephemeral=True,
+            )
 
 
 class StaffOverrideView(discord.ui.View):
