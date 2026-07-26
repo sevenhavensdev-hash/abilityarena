@@ -47,6 +47,7 @@ class DuelBot(commands.Bot):
             help_command=None,
         )
         self.db: Database = Database()
+        self._ready_fired: bool = False  # guard against repeated on_ready calls
 
     async def setup_hook(self):
         await self.db.initialize()
@@ -90,6 +91,11 @@ class DuelBot(commands.Bot):
                 name="⚔️ Competitive Duels",
             )
         )
+        # on_ready fires on every reconnect; only run first-time setup once
+        if self._ready_fired:
+            log.info("on_ready fired again (reconnect) — skipping challenge message setup.")
+            return
+        self._ready_fired = True
         ch = self.get_cog("Challenges")
         if ch:
             await ch.ensure_challenge_message()
