@@ -25,14 +25,13 @@ log = logging.getLogger("views")
 REGIONS = ["Asia", "North America", "South America", "Europe", "Oceania", "Middle East", "Africa"]
 
 STATUS_LABELS = {
-    "awaiting":         "🟡 Awaiting Match",
-    "in_progress":      "🔵 Match in Progress",
+    "awaiting": "🟡 Awaiting Match",
+    "in_progress": "🔵 Match in Progress",
     "awaiting_confirm": "🟠 Awaiting Result Confirmation",
-    "completed":        "🟢 Completed",
-    "disputed":         "🔴 Disputed",
-    "cancelled":        "⚫ Cancelled",
+    "completed": "🟢 Completed",
+    "disputed": "🔴 Disputed",
+    "cancelled": "⚫ Cancelled",
 }
-
 
 def _logger(interaction: discord.Interaction):
     """Shortcut to the LoggingCog helper."""
@@ -71,9 +70,9 @@ class ChallengeModal(discord.ui.Modal, title="⚔️ Create a Duel Challenge"):
         guild = interaction.guild
 
         challenger_roblox = self.challenger_roblox.value.strip()
-        opponent_roblox   = self.opponent_roblox.value.strip()
-        matched_region    = self.region  # already validated by the select
-        opponent_id_raw   = self.opponent_discord.value.strip()
+        opponent_roblox = self.opponent_roblox.value.strip()
+        matched_region = self.region  # already validated by the select
+        opponent_id_raw = self.opponent_discord.value.strip()
 
         # ── Validate opponent Discord ID ─────────────────────────
         try:
@@ -239,16 +238,10 @@ class StaffOverrideModal(discord.ui.Modal, title="🔧 Staff Override"):
     async def on_submit(self, interaction: discord.Interaction):
         bot: DuelBot = interaction.client
 
-        # Permission check
-        staff_role_id = os.getenv("STAFF_ROLE_ID")
-        if not staff_role_id:
+        # Permission check — admins and staff role both allowed
+        if not _is_staff(interaction):
             return await interaction.response.send_message(
-                "❌ STAFF_ROLE_ID is not configured.", ephemeral=True
-            )
-        staff_role = interaction.guild.get_role(int(staff_role_id))
-        if staff_role not in interaction.user.roles:
-            return await interaction.response.send_message(
-                "❌ You do not have permission to override match results.", ephemeral=True
+                "❌ You do not have the Staff role required for this action.", ephemeral=True
             )
 
         try:
@@ -358,7 +351,6 @@ class ReportResultView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
         bot: DuelBot = interaction.client
-        # Match ID is encoded in the thread topic or fetched by thread id
         match = await _match_from_thread(bot, interaction)
         if match is None:
             return await interaction.response.send_message(
@@ -471,7 +463,6 @@ class ConfirmResultView(discord.ui.View):
         if logger:
             await logger.log_result_confirmed(interaction.guild, match, interaction.user)
 
-        # Update the confirm/dispute message to show who confirmed and remove buttons
         try:
             confirmed_embed = interaction.message.embeds[0] if interaction.message.embeds else None
             if confirmed_embed:
@@ -659,6 +650,9 @@ async def _match_from_thread(bot, interaction: discord.Interaction):
 
 
 def _is_staff(interaction: discord.Interaction) -> bool:
+    # Discord administrators are always treated as staff
+    if interaction.user.guild_permissions.administrator:
+        return True
     staff_role_id = os.getenv("STAFF_ROLE_ID")
     if not staff_role_id:
         return False
