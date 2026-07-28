@@ -25,12 +25,13 @@ log = logging.getLogger("views")
 REGIONS = ["Asia", "North America", "South America", "Europe", "Oceania", "Middle East", "Africa"]
 
 STATUS_LABELS = {
-    "awaiting": "🟡 Awaiting Match",
-    "in_progress": "🔵 Match in Progress",
-    "awaiting_confirm": "🟠 Awaiting Result Confirmation",
-    "completed": "🟢 Completed",
-    "disputed": "🔴 Disputed",
-    "cancelled": "⚫ Cancelled",
+    "awaiting":          "🟡 Awaiting Match",
+    "in_progress":       "🔵 Match in Progress",
+    "awaiting_confirm":  "🟠 Awaiting Result Confirmation",
+    "awaiting_forfeit":  "🏳️ Awaiting Forfeit Review",
+    "completed":         "🟢 Completed",
+    "disputed":          "🔴 Disputed",
+    "cancelled":         "⚫ Cancelled",
 }
 
 def _logger(interaction: discord.Interaction):
@@ -70,11 +71,10 @@ class ChallengeModal(discord.ui.Modal, title="⚔️ Create a Duel Challenge"):
         guild = interaction.guild
 
         challenger_roblox = self.challenger_roblox.value.strip()
-        opponent_roblox = self.opponent_roblox.value.strip()
-        matched_region = self.region  # already validated by the select
-        opponent_id_raw = self.opponent_discord.value.strip()
+        opponent_roblox   = self.opponent_roblox.value.strip()
+        matched_region    = self.region
+        opponent_id_raw   = self.opponent_discord.value.strip()
 
-        # ── Validate opponent Discord ID ─────────────────────────
         try:
             opponent_id = int(opponent_id_raw)
         except ValueError:
@@ -86,21 +86,17 @@ class ChallengeModal(discord.ui.Modal, title="⚔️ Create a Duel Challenge"):
         opponent_member = guild.get_member(opponent_id)
         if opponent_member is None:
             return await interaction.response.send_message(
-                "❌ That user is not a member of this server.",
-                ephemeral=True,
+                "❌ That user is not a member of this server.", ephemeral=True,
             )
         if opponent_member.bot:
             return await interaction.response.send_message(
-                "❌ You cannot challenge a bot.",
-                ephemeral=True,
+                "❌ You cannot challenge a bot.", ephemeral=True,
             )
         if opponent_member.id == interaction.user.id:
             return await interaction.response.send_message(
-                "❌ You cannot challenge yourself.",
-                ephemeral=True,
+                "❌ You cannot challenge yourself.", ephemeral=True,
             )
 
-        # ── Duplicate match check ─────────────────────────────────
         has_active = await bot.db.has_active_match(
             str(interaction.user.id), str(opponent_id)
         )
@@ -113,7 +109,6 @@ class ChallengeModal(discord.ui.Modal, title="⚔️ Create a Duel Challenge"):
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        # ── Create match ──────────────────────────────────────────
         challenges_cog = bot.get_cog("Challenges")
         if challenges_cog is None:
             return await interaction.followup.send(
@@ -163,7 +158,7 @@ class ReportResultModal(discord.ui.Modal, title="🏆 Report Match Result"):
             )
 
         user_id = str(interaction.user.id)
-        choice = self.winner_choice.value.strip().lower()
+        choice  = self.winner_choice.value.strip().lower()
 
         if user_id not in (match["challenger_id"], match["opponent_id"]):
             return await interaction.response.send_message(
@@ -171,7 +166,8 @@ class ReportResultModal(discord.ui.Modal, title="🏆 Report Match Result"):
             )
         if match["status"] not in ("awaiting", "in_progress"):
             return await interaction.response.send_message(
-                f"❌ This match cannot accept a result report. Status: {STATUS_LABELS.get(match['status'], match['status'])}",
+                f"❌ This match cannot accept a result report. "
+                f"Status: {STATUS_LABELS.get(match['status'], match['status'])}",
                 ephemeral=True,
             )
         if match["reporter_id"] is not None:
@@ -182,10 +178,7 @@ class ReportResultModal(discord.ui.Modal, title="🏆 Report Match Result"):
         if choice == "me":
             winner_id = user_id
         elif choice in ("opponent", "them"):
-            if user_id == match["challenger_id"]:
-                winner_id = match["opponent_id"]
-            else:
-                winner_id = match["challenger_id"]
+            winner_id = match["opponent_id"] if user_id == match["challenger_id"] else match["challenger_id"]
         else:
             return await interaction.response.send_message(
                 "❌ Please type **me** or **opponent**.", ephemeral=True
@@ -203,7 +196,6 @@ class ReportResultModal(discord.ui.Modal, title="🏆 Report Match Result"):
 
         match = await bot.db.get_match(self.match_id)
 
-        # Update forum post
         matches_cog = bot.get_cog("Matches")
         if matches_cog:
             await matches_cog.update_forum_post(match)
@@ -238,7 +230,6 @@ class StaffOverrideModal(discord.ui.Modal, title="🔧 Staff Override"):
     async def on_submit(self, interaction: discord.Interaction):
         bot: DuelBot = interaction.client
 
-        # Permission check — admins and staff role both allowed
         if not _is_staff(interaction):
             return await interaction.response.send_message(
                 "❌ You do not have the Staff role required for this action.", ephemeral=True
@@ -274,7 +265,6 @@ class StaffOverrideModal(discord.ui.Modal, title="🔧 Staff Override"):
 
         match = await bot.db.get_match(self.match_id)
 
-        # Apply Elo
         matches_cog = bot.get_cog("Matches")
         if matches_cog:
             await matches_cog.finalise_match(match, interaction.guild, how="staff_override")
@@ -337,7 +327,7 @@ class CreateChallengeView(discord.ui.View):
 # ------------------------------------------------------------------
 
 class ReportResultView(discord.ui.View):
-    """Attached to each forum post. Report / Cancel buttons."""
+    """Attached to each forum post. Report / Cancel / Forfeit buttons."""
 
     def __init__(self):
         super().__init__(timeout=None)
@@ -372,6 +362,59 @@ class ReportResultView(discord.ui.View):
         await interaction.response.send_modal(ReportResultModal(match["match_id"]))
 
     @discord.ui.button(
+        label="🏳️ Forfeit",
+        style=discord.ButtonStyle.secondary,
+        custom_id="forfeit_btn",
+    )
+    async def forfeit(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        bot: DuelBot = interaction.client
+        match = await _match_from_thread(bot, interaction)
+        if match is None:
+            return await interaction.response.send_message(
+                "❌ Could not find match.", ephemeral=True
+            )
+        user_id = str(interaction.user.id)
+
+        # Only the challenged player (opponent) can forfeit
+        if user_id != match["opponent_id"]:
+            return await interaction.response.send_message(
+                "❌ Only the challenged player can forfeit. "
+                "If you want to withdraw your challenge, use **❌ Cancel Match**.",
+                ephemeral=True,
+            )
+        if match["status"] not in ("awaiting", "in_progress"):
+            return await interaction.response.send_message(
+                f"❌ Cannot forfeit. Status: {STATUS_LABELS.get(match['status'], match['status'])}",
+                ephemeral=True,
+            )
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        success = await bot.db.request_forfeit(match["match_id"], forfeiter_id=user_id)
+        if not success:
+            return await interaction.followup.send(
+                "❌ Could not register forfeit. Try again.", ephemeral=True
+            )
+
+        match = await bot.db.get_match(match["match_id"])
+
+        # Update the forum post view
+        matches_cog = bot.get_cog("Matches")
+        if matches_cog:
+            await matches_cog.update_forum_post(match)
+            await matches_cog.post_forfeit_notice(match, interaction.guild, interaction.user)
+
+        logger = _logger(interaction)
+        if logger:
+            await logger.log_forfeit_requested(interaction.guild, match, interaction.user)
+
+        await interaction.followup.send(
+            "🏳️ Forfeit submitted. Staff have been notified to review.", ephemeral=True
+        )
+
+    @discord.ui.button(
         label="❌ Cancel Match",
         style=discord.ButtonStyle.danger,
         custom_id="cancel_match_btn",
@@ -385,10 +428,10 @@ class ReportResultView(discord.ui.View):
             return await interaction.response.send_message(
                 "❌ Could not find match.", ephemeral=True
             )
-        user_id = str(interaction.user.id)
+        user_id    = str(interaction.user.id)
         is_participant = user_id in (match["challenger_id"], match["opponent_id"])
-        is_staff = _is_staff(interaction)
-        if not is_participant and not is_staff:
+        is_staff_user  = _is_staff(interaction)
+        if not is_participant and not is_staff_user:
             return await interaction.response.send_message(
                 "❌ Only participants or staff can cancel this match.", ephemeral=True
             )
@@ -443,11 +486,13 @@ class ConfirmResultView(discord.ui.View):
             )
         if match["status"] != "awaiting_confirm":
             return await interaction.response.send_message(
-                f"❌ No pending result to confirm. Status: {STATUS_LABELS.get(match['status'], match['status'])}",
+                f"❌ No pending result to confirm. "
+                f"Status: {STATUS_LABELS.get(match['status'], match['status'])}",
                 ephemeral=True,
             )
 
         await interaction.response.defer(ephemeral=True, thinking=True)
+
         success = await bot.db.confirm_result(match["match_id"], confirmer_id=user_id)
         if not success:
             return await interaction.followup.send(
@@ -455,6 +500,7 @@ class ConfirmResultView(discord.ui.View):
             )
 
         match = await bot.db.get_match(match["match_id"])
+
         matches_cog = bot.get_cog("Matches")
         if matches_cog:
             await matches_cog.finalise_match(match, interaction.guild, how="opponent_confirm")
@@ -463,20 +509,25 @@ class ConfirmResultView(discord.ui.View):
         if logger:
             await logger.log_result_confirmed(interaction.guild, match, interaction.user)
 
+        # Edit the confirm/dispute message to remove buttons and show confirmed state
         try:
-            confirmed_embed = interaction.message.embeds[0] if interaction.message.embeds else None
-            if confirmed_embed:
-                confirmed_embed.colour = discord.Color.green()
-                confirmed_embed.set_footer(text=f"✅ Confirmed by {interaction.user.display_name}")
             await interaction.message.edit(
-                content=f"✅ {interaction.user.mention} confirmed the result. Elo has been updated!",
-                embed=confirmed_embed,
+                content=f"✅ {interaction.user.mention} confirmed the result.",
+                embed=None,
                 view=discord.ui.View(),  # removes all buttons
             )
         except Exception:
             pass
 
-        await interaction.followup.send("✅ Result confirmed. Elo has been updated.", ephemeral=True)
+        # Send a PUBLIC message so everyone in the thread can see
+        try:
+            await interaction.channel.send(
+                f"✅ Result confirmed by {interaction.user.mention}. Elo has been updated!"
+            )
+        except Exception:
+            pass
+
+        await interaction.followup.send("✅ Done.", ephemeral=True)
 
     @discord.ui.button(
         label="❌ Dispute Result",
@@ -509,46 +560,38 @@ class ConfirmResultView(discord.ui.View):
             )
 
         await interaction.response.defer(ephemeral=True, thinking=True)
+
         dispute_count = await bot.db.dispute_result(match["match_id"], disputer_id=user_id)
         match = await bot.db.get_match(match["match_id"])
 
         if dispute_count == 1:
-            # First dispute — warn and keep buttons active
+            # First dispute — warn, keep buttons active, send public message
             try:
                 await interaction.message.edit(
                     content=(
                         f"⚠️ {interaction.user.mention} disputed the result once.\n"
-                        f"**If you dispute again, staff will be called in to review.**\n"
+                        f"**Dispute once more to escalate to staff review.**\n"
                         f"The other player can still confirm if this was a mistake."
                     ),
                     view=ConfirmResultView(),
                 )
             except Exception:
                 pass
-            await interaction.followup.send(
-                "⚠️ First dispute recorded. Dispute once more to escalate to staff, "
-                "or the other player can still confirm the result.",
-                ephemeral=True,
-            )
-        else:
-            # Second dispute — finalize and ping staff
-            matches_cog = bot.get_cog("Matches")
-            if matches_cog:
-                await matches_cog.update_forum_post(match)
 
-            staff_role_id = os.getenv("STAFF_ROLE_ID")
-            staff_mention = f"<@&{staff_role_id}>" if staff_role_id else "Staff"
             try:
-                thread_id = match["forum_thread_id"]
-                if thread_id:
-                    thread = bot.get_channel(int(thread_id)) or await bot.fetch_channel(int(thread_id))
-                    await thread.send(
-                        f"{staff_mention} — Match **#{match['match_id']}** has been disputed twice. "
-                        f"A staff override is required."
-                    )
+                await interaction.channel.send(
+                    f"⚠️ {interaction.user.mention} has disputed the reported result. "
+                    f"Dispute once more to call in staff."
+                )
             except Exception:
                 pass
 
+            await interaction.followup.send(
+                "⚠️ First dispute recorded. Dispute once more to escalate to staff.",
+                ephemeral=True,
+            )
+        else:
+            # Second dispute — remove buttons, ping staff
             try:
                 await interaction.message.edit(
                     content=(
@@ -559,6 +602,21 @@ class ConfirmResultView(discord.ui.View):
                 )
             except Exception:
                 pass
+
+            staff_role_id  = os.getenv("STAFF_ROLE_ID")
+            staff_mention  = f"<@&{staff_role_id}>" if staff_role_id else "Staff"
+            try:
+                await interaction.channel.send(
+                    f"🔴 {staff_mention} — Match **#{match['match_id']}** has been disputed twice. "
+                    f"A staff override is required."
+                )
+            except Exception:
+                pass
+
+            # Update forum post to show StaffOverrideView
+            matches_cog = bot.get_cog("Matches")
+            if matches_cog:
+                await matches_cog.update_forum_post(match)
 
             logger = _logger(interaction)
             if logger:
@@ -595,6 +653,142 @@ class StaffOverrideView(discord.ui.View):
                 "❌ Could not find match.", ephemeral=True
             )
         await interaction.response.send_modal(StaffOverrideModal(match["match_id"]))
+
+
+class StaffForfeitApprovalView(discord.ui.View):
+    """
+    Persistent staff buttons for approving/denying a forfeit request.
+    Uses _match_from_thread so it doesn't need state and survives restarts.
+    """
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="✅ Approve Forfeit",
+        style=discord.ButtonStyle.success,
+        custom_id="forfeit_approve_btn",
+    )
+    async def approve_forfeit(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        if not _is_staff(interaction):
+            return await interaction.response.send_message(
+                "❌ Staff only.", ephemeral=True
+            )
+        bot: DuelBot = interaction.client
+        match = await _match_from_thread(bot, interaction)
+        if match is None:
+            return await interaction.response.send_message(
+                "❌ Could not find match.", ephemeral=True
+            )
+        if match["status"] != "awaiting_forfeit":
+            return await interaction.response.send_message(
+                f"❌ Match is not awaiting forfeit approval. "
+                f"Status: {STATUS_LABELS.get(match['status'], match['status'])}",
+                ephemeral=True,
+            )
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        success = await bot.db.approve_forfeit(match["match_id"])
+        if not success:
+            return await interaction.followup.send("❌ Approve failed.", ephemeral=True)
+
+        match = await bot.db.get_match(match["match_id"])
+
+        matches_cog = bot.get_cog("Matches")
+        if matches_cog:
+            await matches_cog.finalise_match(match, interaction.guild, how="forfeit")
+
+        forfeiter_id    = match["forfeiter_id"]
+        forfeit_count   = await bot.db.get_player_forfeit_count(forfeiter_id)
+        repeat_warning  = (
+            f"\n⚠️ **Repeat offender alert** — <@{forfeiter_id}> has now forfeited **{forfeit_count}** time(s). "
+            f"Consider reviewing for smurfing."
+            if forfeit_count >= 2 else ""
+        )
+
+        # Edit the staff notice to remove buttons
+        try:
+            await interaction.message.edit(
+                content=f"✅ Forfeit approved by {interaction.user.mention}. Match resolved.",
+                view=discord.ui.View(),
+            )
+        except Exception:
+            pass
+
+        # Public thread announcement
+        try:
+            await interaction.channel.send(
+                f"🏳️ Forfeit approved by staff. "
+                f"<@{forfeiter_id}> forfeits — <@{match['winner_id']}> wins!"
+                f"{repeat_warning}"
+            )
+        except Exception:
+            pass
+
+        logger = _logger(interaction)
+        if logger:
+            await logger.log_forfeit_approved(
+                interaction.guild, match, interaction.user, forfeit_count
+            )
+
+        await interaction.followup.send("✅ Forfeit approved.", ephemeral=True)
+
+    @discord.ui.button(
+        label="❌ Deny Forfeit",
+        style=discord.ButtonStyle.danger,
+        custom_id="forfeit_deny_btn",
+    )
+    async def deny_forfeit(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        if not _is_staff(interaction):
+            return await interaction.response.send_message(
+                "❌ Staff only.", ephemeral=True
+            )
+        bot: DuelBot = interaction.client
+        match = await _match_from_thread(bot, interaction)
+        if match is None:
+            return await interaction.response.send_message(
+                "❌ Could not find match.", ephemeral=True
+            )
+        if match["status"] != "awaiting_forfeit":
+            return await interaction.response.send_message(
+                f"❌ Match is not awaiting forfeit approval. "
+                f"Status: {STATUS_LABELS.get(match['status'], match['status'])}",
+                ephemeral=True,
+            )
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        await bot.db.deny_forfeit(match["match_id"])
+        match = await bot.db.get_match(match["match_id"])
+
+        matches_cog = bot.get_cog("Matches")
+        if matches_cog:
+            await matches_cog.update_forum_post(match)
+
+        # Edit staff notice to remove buttons
+        try:
+            await interaction.message.edit(
+                content=f"❌ Forfeit denied by {interaction.user.mention}. Match continues.",
+                view=discord.ui.View(),
+            )
+        except Exception:
+            pass
+
+        # Public thread announcement
+        try:
+            await interaction.channel.send(
+                f"❌ Forfeit request denied by staff. The match continues! "
+                f"<@{match['challenger_id']}> <@{match['opponent_id']}>"
+            )
+        except Exception:
+            pass
+
+        await interaction.followup.send("❌ Forfeit denied.", ephemeral=True)
 
 
 class LeaderboardView(discord.ui.View):
