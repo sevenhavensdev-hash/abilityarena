@@ -17,6 +17,7 @@ from views import (
     ReportResultView,
     ConfirmResultView,
     StaffOverrideView,
+    StaffForfeitApprovalView,
     LeaderboardView,
 )
 
@@ -57,6 +58,7 @@ class DuelBot(commands.Bot):
         self.add_view(ReportResultView())
         self.add_view(ConfirmResultView())
         self.add_view(StaffOverrideView())
+        self.add_view(StaffForfeitApprovalView())
         self.add_view(LeaderboardView())
 
         # Load all cogs
