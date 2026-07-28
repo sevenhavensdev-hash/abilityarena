@@ -3,41 +3,45 @@ cogs/matches.py
 
 Handles:
  - Updating forum post embeds when match status changes.
- - Posting confirm/dispute request messages.
- - Finalising matches (Elo calculation, archiving thread).
- - /match command (lookup by ID).
+ - Posting confirm/dispute/forfeit request messages.
+ - Finalising matches (Elo calculation, posting new completion message, archiving thread).
+ - Auto-forfeit background task (checks for 3-day stale matches every hour).
+ - /match and /mymatches commands.
 """
 
 from __future__ import annotations
 
+import os
 import logging
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from views import (
     ConfirmResultView,
     ReportResultView,
     StaffOverrideView,
+    StaffForfeitApprovalView,
     STATUS_LABELS,
 )
 
 log = logging.getLogger("cogs.matches")
 
 STATUS_COLORS = {
-    "awaiting":         discord.Color.yellow(),
-    "in_progress":      discord.Color.blue(),
-    "awaiting_confirm": discord.Color.orange(),
-    "completed":        discord.Color.green(),
-    "disputed":         discord.Color.red(),
-    "cancelled":        discord.Color.dark_gray(),
+    "awaiting":          discord.Color.yellow(),
+    "in_progress":       discord.Color.blue(),
+    "awaiting_confirm":  discord.Color.orange(),
+    "awaiting_forfeit":  discord.Color.purple(),
+    "completed":         discord.Color.green(),
+    "disputed":          discord.Color.red(),
+    "cancelled":         discord.Color.dark_gray(),
 }
 
 
 def _match_embed(match) -> discord.Embed:
-    status = match["status"]
+    status       = match["status"]
     status_label = STATUS_LABELS.get(status, status)
-    color = STATUS_COLORS.get(status, discord.Color.default())
+    color        = STATUS_COLORS.get(status, discord.Color.default())
     embed = discord.Embed(title="⚔️ Competitive Duel", color=color)
     embed.add_field(name="Match ID", value=f"#{match['match_id']}", inline=False)
     embed.add_field(
@@ -81,6 +85,55 @@ def _match_embed(match) -> discord.Embed:
 class Matches(commands.Cog, name="Matches"):
     def __init__(self, bot):
         self.bot = bot
+        self.auto_forfeit_task.start()
+
+    def cog_unload(self):
+        self.auto_forfeit_task.cancel()
+
+    # ------------------------------------------------------------------
+    # Background task — auto-forfeit stale matches after 3 days
+    # ------------------------------------------------------------------
+    @tasks.loop(hours=1)
+    async def auto_forfeit_task(self):
+        """
+        Checks every hour for matches that have been sitting in 'awaiting'
+        for more than 3 days. Flags them for forfeit and pings staff.
+        """
+        try:
+            stale = await self.bot.db.get_stale_matches(seconds=259200)  # 72 hours
+            for match in stale:
+                await self.bot.db.mark_forfeit_notified(match["match_id"])
+                # Auto-request forfeit against the opponent (they didn't respond)
+                await self.bot.db.request_forfeit(match["match_id"], match["opponent_id"])
+                match = await self.bot.db.get_match(match["match_id"])
+
+                forum_thread_id = match["forum_thread_id"]
+                if not forum_thread_id:
+                    continue
+                try:
+                    thread = self.bot.get_channel(int(forum_thread_id))
+                    if thread is None:
+                        thread = await self.bot.fetch_channel(int(forum_thread_id))
+
+                    staff_role_id = os.getenv("STAFF_ROLE_ID")
+                    staff_mention = f"<@&{staff_role_id}>" if staff_role_id else "Staff"
+
+                    await thread.send(
+                        f"⏰ {staff_mention} — This match has been awaiting for **over 3 days** "
+                        f"with no response from <@{match['opponent_id']}>.\n"
+                        f"They have been automatically flagged for a forfeit. "
+                        f"Please approve or deny below.",
+                        view=StaffForfeitApprovalView(),
+                    )
+                    log.info("Auto-forfeit flagged match %s.", match["match_id"])
+                except Exception as exc:
+                    log.warning("Auto-forfeit notification failed for match %s: %s", match["match_id"], exc)
+        except Exception as exc:
+            log.exception("Error in auto_forfeit_task: %s", exc)
+
+    @auto_forfeit_task.before_loop
+    async def before_auto_forfeit(self):
+        await self.bot.wait_until_ready()
 
     # ------------------------------------------------------------------
     async def _get_forum_message(self, match) -> discord.Message | None:
@@ -90,8 +143,7 @@ class Matches(commands.Cog, name="Matches"):
             thread = self.bot.get_channel(int(match["forum_thread_id"]))
             if thread is None:
                 thread = await self.bot.fetch_channel(int(match["forum_thread_id"]))
-            msg = await thread.fetch_message(int(match["forum_message_id"]))
-            return msg
+            return await thread.fetch_message(int(match["forum_message_id"]))
         except Exception as exc:
             log.warning("Could not fetch forum message: %s", exc)
             return None
@@ -103,19 +155,19 @@ class Matches(commands.Cog, name="Matches"):
         if msg is None:
             return
 
-        embed = _match_embed(match)
+        embed  = _match_embed(match)
         status = match["status"]
 
-        # Pick correct action view
         if status in ("awaiting", "in_progress"):
             view = ReportResultView()
         elif status == "awaiting_confirm":
-            # Still show Report + Cancel but they will be blocked by status checks
             view = ReportResultView()
         elif status == "disputed":
             view = StaffOverrideView()
+        elif status == "awaiting_forfeit":
+            view = StaffForfeitApprovalView()
         else:
-            view = discord.ui.View()  # no buttons when completed/cancelled
+            view = discord.ui.View()  # no buttons for completed / cancelled
 
         try:
             await msg.edit(embed=embed, view=view)
@@ -124,7 +176,7 @@ class Matches(commands.Cog, name="Matches"):
 
     # ------------------------------------------------------------------
     async def post_confirm_request(self, match, guild: discord.Guild):
-        """Posts a confirm/dispute message in the thread."""
+        """Posts a confirm/dispute message in the thread after a result is reported."""
         if not match["forum_thread_id"]:
             return
         try:
@@ -151,7 +203,6 @@ class Matches(commands.Cog, name="Matches"):
                 value=f"<@{match['loser_id']}> (**{match['loser_roblox']}**)",
                 inline=False,
             )
-            embed.set_footer(text=f"<@{other_id}>, please confirm or dispute this result.")
 
             await thread.send(
                 content=f"<@{other_id}>, please confirm or dispute this result.",
@@ -162,30 +213,59 @@ class Matches(commands.Cog, name="Matches"):
             log.warning("Could not post confirm request: %s", exc)
 
     # ------------------------------------------------------------------
+    async def post_forfeit_notice(self, match, guild: discord.Guild, forfeiter: discord.Member):
+        """Posts a staff-ping message asking them to approve or deny a voluntary forfeit."""
+        if not match["forum_thread_id"]:
+            return
+        try:
+            thread = self.bot.get_channel(int(match["forum_thread_id"]))
+            if thread is None:
+                thread = await self.bot.fetch_channel(int(match["forum_thread_id"]))
+
+            staff_role_id = os.getenv("STAFF_ROLE_ID")
+            staff_mention = f"<@&{staff_role_id}>" if staff_role_id else "Staff"
+
+            forfeit_count = await self.bot.db.get_player_forfeit_count(str(forfeiter.id))
+            history_note  = (
+                f"\n⚠️ Note: {forfeiter.mention} has forfeited **{forfeit_count}** time(s) before."
+                if forfeit_count >= 1 else ""
+            )
+
+            await thread.send(
+                content=(
+                    f"🏳️ {staff_mention} — {forfeiter.mention} has requested to forfeit "
+                    f"Match **#{match['match_id']}**. Please approve or deny."
+                    f"{history_note}"
+                ),
+                view=StaffForfeitApprovalView(),
+            )
+        except Exception as exc:
+            log.warning("Could not post forfeit notice: %s", exc)
+
+    # ------------------------------------------------------------------
     async def finalise_match(self, match, guild: discord.Guild, how: str):
         """
-        Calculates Elo, updates DB, updates the forum post, and archives the thread.
-        `how` is one of: 'opponent_confirm', 'staff_override'
+        Calculates Elo, updates DB, posts a NEW completion message,
+        removes buttons from original post, and archives the thread.
+        `how` is one of: 'opponent_confirm', 'staff_override', 'forfeit'
         """
         elo_cog = self.bot.get_cog("Elo")
         if elo_cog is None:
             log.error("Elo cog not loaded — cannot finalise match.")
             return
 
-        winner_id   = match["winner_id"]
-        loser_id    = match["loser_id"]
+        winner_id     = match["winner_id"]
+        loser_id      = match["loser_id"]
         challenger_id = match["challenger_id"]
         opponent_id   = match["opponent_id"]
 
-        winner_player  = await self.bot.db.get_or_create_player(winner_id)
-        loser_player   = await self.bot.db.get_or_create_player(loser_id)
+        winner_player = await self.bot.db.get_or_create_player(winner_id)
+        loser_player  = await self.bot.db.get_or_create_player(loser_id)
 
-        # Elo calculation
         winner_new, loser_new = elo_cog.calculate(
             winner_player["elo"], loser_player["elo"]
         )
 
-        # Map back to challenger/opponent
         if winner_id == challenger_id:
             c_before, c_after = winner_player["elo"], winner_new
             o_before, o_after = loser_player["elo"],  loser_new
@@ -204,14 +284,34 @@ class Matches(commands.Cog, name="Matches"):
             log.warning("Elo already applied for match %s — skipping.", match["match_id"])
             return
 
-        # Update individual player rows
         await self.bot.db.update_player_elo(winner_id, winner_new, won=True)
         await self.bot.db.update_player_elo(loser_id,  loser_new,  won=False)
 
         match = await self.bot.db.get_match(match["match_id"])
 
-        # Update the forum embed
-        await self.update_forum_post(match)
+        # Remove buttons from the original forum post (don't edit content)
+        msg = await self._get_forum_message(match)
+        if msg:
+            try:
+                await msg.edit(view=discord.ui.View())
+            except Exception as exc:
+                log.warning("Could not remove buttons from forum post: %s", exc)
+
+        # Send a NEW message with the final result embed
+        if match["forum_thread_id"]:
+            try:
+                thread = self.bot.get_channel(int(match["forum_thread_id"]))
+                if thread is None:
+                    thread = await self.bot.fetch_channel(int(match["forum_thread_id"]))
+
+                how_label = how.replace("_", " ").title()
+                embed     = _match_embed(match)
+                await thread.send(
+                    content=f"🏆 **Match Complete** ({how_label})",
+                    embed=embed,
+                )
+            except Exception as exc:
+                log.warning("Could not post completion message: %s", exc)
 
         # Archive / lock the thread
         if match["forum_thread_id"]:
@@ -254,11 +354,11 @@ class Matches(commands.Cog, name="Matches"):
             color=discord.Color.blurple(),
         )
         for m in rows:
-            won = m["winner_id"] == str(interaction.user.id)
-            result_str = "🏆 Won" if won else "❌ Lost"
-            opp_id = m["opponent_id"] if m["challenger_id"] == str(interaction.user.id) else m["challenger_id"]
+            won      = m["winner_id"] == str(interaction.user.id)
+            result   = "🏆 Won" if won else "❌ Lost"
+            opp_id   = m["opponent_id"] if m["challenger_id"] == str(interaction.user.id) else m["challenger_id"]
             embed.add_field(
-                name=f"#{m['match_id']} {result_str}",
+                name=f"#{m['match_id']} {result}",
                 value=f"vs <@{opp_id}> | Region: {m['region']}",
                 inline=False,
             )
