@@ -36,12 +36,14 @@ class Database:
             "ALTER TABLE matches ADD COLUMN dispute_count INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE matches ADD COLUMN forfeiter_id TEXT",
             "ALTER TABLE matches ADD COLUMN forfeit_notified INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE matches ADD COLUMN dispute_message_id TEXT",
+            "ALTER TABLE matches ADD COLUMN dispute_message_channel_id TEXT",
             "ALTER TABLE players ADD COLUMN forfeit_count INTEGER NOT NULL DEFAULT 0",
         ]
         for stmt in migrations:
             try:
                 await self._db.execute(stmt)
-                log.info("Migration applied: %s", stmt[:60])
+                log.info("Migration applied: %s", stmt[:70])
             except Exception:
                 pass  # Column already exists — ignore
 
@@ -67,34 +69,36 @@ class Database:
             );
 
             CREATE TABLE IF NOT EXISTS matches (
-                match_id              TEXT PRIMARY KEY,
-                challenger_id         TEXT NOT NULL,
-                opponent_id           TEXT NOT NULL,
-                challenger_roblox     TEXT NOT NULL,
-                opponent_roblox       TEXT NOT NULL,
-                region                TEXT NOT NULL,
-                status                TEXT NOT NULL DEFAULT 'awaiting',
-                winner_id             TEXT,
-                winner_roblox         TEXT,
-                loser_id              TEXT,
-                loser_roblox          TEXT,
-                reporter_id           TEXT,
-                confirmer_id          TEXT,
-                staff_override_id     TEXT,
-                staff_override_reason TEXT,
-                challenger_elo_before INTEGER,
-                opponent_elo_before   INTEGER,
-                challenger_elo_after  INTEGER,
-                opponent_elo_after    INTEGER,
-                elo_changed           INTEGER NOT NULL DEFAULT 0,
-                dispute_count         INTEGER NOT NULL DEFAULT 0,
-                forfeiter_id          TEXT,
-                forfeit_notified      INTEGER NOT NULL DEFAULT 0,
-                forum_channel_id      TEXT,
-                forum_thread_id       TEXT,
-                forum_message_id      TEXT,
-                created_at            INTEGER NOT NULL,
-                completed_at          INTEGER
+                match_id                  TEXT PRIMARY KEY,
+                challenger_id             TEXT NOT NULL,
+                opponent_id               TEXT NOT NULL,
+                challenger_roblox         TEXT NOT NULL,
+                opponent_roblox           TEXT NOT NULL,
+                region                    TEXT NOT NULL,
+                status                    TEXT NOT NULL DEFAULT 'awaiting',
+                winner_id                 TEXT,
+                winner_roblox             TEXT,
+                loser_id                  TEXT,
+                loser_roblox              TEXT,
+                reporter_id               TEXT,
+                confirmer_id              TEXT,
+                staff_override_id         TEXT,
+                staff_override_reason     TEXT,
+                challenger_elo_before     INTEGER,
+                opponent_elo_before       INTEGER,
+                challenger_elo_after      INTEGER,
+                opponent_elo_after        INTEGER,
+                elo_changed               INTEGER NOT NULL DEFAULT 0,
+                dispute_count             INTEGER NOT NULL DEFAULT 0,
+                forfeiter_id              TEXT,
+                forfeit_notified          INTEGER NOT NULL DEFAULT 0,
+                dispute_message_id        TEXT,
+                dispute_message_channel_id TEXT,
+                forum_channel_id          TEXT,
+                forum_thread_id           TEXT,
+                forum_message_id          TEXT,
+                created_at                INTEGER NOT NULL,
+                completed_at              INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS bot_config (
@@ -169,6 +173,48 @@ class Database:
             row = await cur.fetchone()
             return int(row["fc"]) if row else 0
 
+    async def reset_player_stats(
+        self,
+        discord_id: str,
+        wins: Optional[int] = None,
+        losses: Optional[int] = None,
+        elo: Optional[int] = None,
+        forfeit_count: Optional[int] = None,
+    ) -> bool:
+        """
+        Reset specific player stats. Pass None to leave a field unchanged.
+        Creates the player row if it doesn't exist.
+        Returns False if nothing was changed.
+        """
+        await self.get_or_create_player(discord_id)
+
+        parts: list[str] = []
+        values: list = []
+        if wins is not None:
+            parts.append("wins = ?")
+            values.append(max(0, wins))
+        if losses is not None:
+            parts.append("losses = ?")
+            values.append(max(0, losses))
+        if elo is not None:
+            parts.append("elo = ?")
+            values.append(min(3000, max(0, elo)))
+        if forfeit_count is not None:
+            parts.append("forfeit_count = ?")
+            values.append(max(0, forfeit_count))
+
+        if not parts:
+            return False
+
+        values.append(discord_id)
+        async with self._lock:
+            await self._db.execute(
+                f"UPDATE players SET {', '.join(parts)} WHERE discord_id = ?",
+                values,
+            )
+            await self._db.commit()
+        return True
+
     # ------------------------------------------------------------------
     # Match methods
     # ------------------------------------------------------------------
@@ -234,6 +280,38 @@ class Database:
             )
             await self._db.commit()
 
+    async def store_dispute_message(
+        self, match_id: str, message_id: str, channel_id: str
+    ):
+        """Store the ID of the message posted in the dispute/case channel."""
+        async with self._lock:
+            await self._db.execute(
+                """
+                UPDATE matches
+                SET dispute_message_id = ?, dispute_message_channel_id = ?
+                WHERE match_id = ?
+                """,
+                (message_id, channel_id, match_id),
+            )
+            await self._db.commit()
+
+    async def get_dispute_message(self, match_id: str) -> Optional[aiosqlite.Row]:
+        """
+        Returns a Row with 'dispute_message_id' and 'dispute_message_channel_id',
+        or None if no dispute message has been stored.
+        """
+        async with self._db.execute(
+            """
+            SELECT dispute_message_id, dispute_message_channel_id
+            FROM matches WHERE match_id = ?
+            """,
+            (match_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            if row and row["dispute_message_id"]:
+                return row
+            return None
+
     async def report_result(
         self, match_id: str, reporter_id: str, winner_id: str
     ) -> bool:
@@ -241,7 +319,6 @@ class Database:
         match = await self.get_match(match_id)
         if match is None or match["reporter_id"] is not None:
             return False
-        # Determine winner/loser roblox names
         if winner_id == match["challenger_id"]:
             winner_roblox = match["challenger_roblox"]
             loser_id = match["opponent_id"]
@@ -277,7 +354,7 @@ class Database:
         if match is None or match["confirmer_id"] is not None:
             return False
         if match["reporter_id"] == confirmer_id:
-            return False  # cannot confirm own report
+            return False
         async with self._lock:
             await self._db.execute(
                 "UPDATE matches SET confirmer_id = ?, status = 'in_progress' WHERE match_id = ?",
@@ -287,7 +364,7 @@ class Database:
         return True
 
     async def dispute_result(self, match_id: str, disputer_id: str) -> int:
-        """Increment dispute count. Sets status to 'disputed' only on the 2nd dispute.
+        """Increment dispute count. Sets status to 'disputed' on the 2nd dispute.
         Returns the new dispute_count."""
         async with self._lock:
             await self._db.execute(
@@ -353,7 +430,6 @@ class Database:
         match = await self.get_match(match_id)
         if match is None:
             return False
-        # Determine roblox names
         if winner_id == match["challenger_id"]:
             winner_roblox = match["challenger_roblox"]
             loser_id = match["opponent_id"]
@@ -444,7 +520,6 @@ class Database:
         """
         Mark a match as awaiting forfeit review.
         Only valid if the match is currently 'awaiting' or 'in_progress'.
-        Returns False if the match is not in a forfeitable state.
         """
         match = await self.get_match(match_id)
         if match is None or match["status"] not in ("awaiting", "in_progress"):
@@ -459,9 +534,8 @@ class Database:
 
     async def approve_forfeit(self, match_id: str) -> bool:
         """
-        Approve a pending forfeit. Sets winner to the non-forfeiter,
-        stores 'Forfeit' in staff_override_reason, increments forfeit_count
-        on the forfeiter's player record.
+        Approve a pending forfeit. Sets winner to the non-forfeiter and
+        increments forfeit_count on the forfeiter's player record.
         """
         match = await self.get_match(match_id)
         if match is None or match["status"] != "awaiting_forfeit":
@@ -472,14 +546,14 @@ class Database:
             return False
 
         if forfeiter_id == match["challenger_id"]:
-            winner_id    = match["opponent_id"]
+            winner_id     = match["opponent_id"]
             winner_roblox = match["opponent_roblox"]
-            loser_id     = match["challenger_id"]
+            loser_id      = match["challenger_id"]
             loser_roblox  = match["challenger_roblox"]
         else:
-            winner_id    = match["challenger_id"]
+            winner_id     = match["challenger_id"]
             winner_roblox = match["challenger_roblox"]
-            loser_id     = match["opponent_id"]
+            loser_id      = match["opponent_id"]
             loser_roblox  = match["opponent_roblox"]
 
         async with self._lock:
@@ -499,7 +573,6 @@ class Database:
                     match_id,
                 ),
             )
-            # Increment the forfeiter's lifetime forfeit counter
             await self._db.execute(
                 "UPDATE players SET forfeit_count = COALESCE(forfeit_count, 0) + 1 "
                 "WHERE discord_id = ?",
@@ -509,10 +582,7 @@ class Database:
         return True
 
     async def deny_forfeit(self, match_id: str) -> bool:
-        """
-        Deny a pending forfeit request. Reverts match status to 'awaiting'
-        and clears the forfeiter_id.
-        """
+        """Deny a pending forfeit request and revert status to 'awaiting'."""
         async with self._lock:
             await self._db.execute(
                 "UPDATE matches SET status = 'awaiting', forfeiter_id = NULL WHERE match_id = ?",
