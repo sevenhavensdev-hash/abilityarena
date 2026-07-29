@@ -30,7 +30,7 @@ STATUS_LABELS = {
     "awaiting_confirm":  "🟠 Awaiting Result Confirmation",
     "awaiting_forfeit":  "🏳️ Awaiting Forfeit Review",
     "completed":         "🟢 Completed",
-    "disputed":          "🔴 Disputed",
+    "disputed":          "🔴 Disputed — Staff Reviewing",
     "cancelled":         "⚫ Cancelled",
 }
 
@@ -275,6 +275,14 @@ class StaffOverrideModal(discord.ui.Modal, title="🔧 Staff Override"):
                 interaction.guild, match, interaction.user, old_status
             )
 
+        # Edit the dispute channel message to mark it as handled
+        await _mark_dispute_handled(
+            bot,
+            match["match_id"],
+            f"✅ **{interaction.user.display_name}** has resolved this case — "
+            f"Match **#{match['match_id']}** handled via staff override.",
+        )
+
         await interaction.followup.send(
             f"✅ Override applied. Match **#{self.match_id}** resolved.", ephemeral=True
         )
@@ -327,7 +335,7 @@ class CreateChallengeView(discord.ui.View):
 # ------------------------------------------------------------------
 
 class ReportResultView(discord.ui.View):
-    """Attached to each forum post. Report / Cancel / Forfeit buttons."""
+    """Attached to each forum post. Report / Forfeit / Cancel buttons."""
 
     def __init__(self):
         super().__init__(timeout=None)
@@ -400,11 +408,10 @@ class ReportResultView(discord.ui.View):
 
         match = await bot.db.get_match(match["match_id"])
 
-        # Update the forum post view
         matches_cog = bot.get_cog("Matches")
         if matches_cog:
             await matches_cog.update_forum_post(match)
-            await matches_cog.post_forfeit_notice(match, interaction.guild, interaction.user)
+            await matches_cog.post_forfeit_notice(match, interaction.guild, forfeiter=interaction.user)
 
         logger = _logger(interaction)
         if logger:
@@ -428,7 +435,7 @@ class ReportResultView(discord.ui.View):
             return await interaction.response.send_message(
                 "❌ Could not find match.", ephemeral=True
             )
-        user_id    = str(interaction.user.id)
+        user_id        = str(interaction.user.id)
         is_participant = user_id in (match["challenger_id"], match["opponent_id"])
         is_staff_user  = _is_staff(interaction)
         if not is_participant and not is_staff_user:
@@ -509,17 +516,17 @@ class ConfirmResultView(discord.ui.View):
         if logger:
             await logger.log_result_confirmed(interaction.guild, match, interaction.user)
 
-        # Edit the confirm/dispute message to remove buttons and show confirmed state
+        # Edit the confirm/dispute message — remove buttons, show confirmed state
         try:
             await interaction.message.edit(
                 content=f"✅ {interaction.user.mention} confirmed the result.",
                 embed=None,
-                view=discord.ui.View(),  # removes all buttons
+                view=discord.ui.View(),
             )
         except Exception:
             pass
 
-        # Send a PUBLIC message so everyone in the thread can see
+        # Public message visible to everyone in the thread
         try:
             await interaction.channel.send(
                 f"✅ Result confirmed by {interaction.user.mention}. Elo has been updated!"
@@ -565,7 +572,7 @@ class ConfirmResultView(discord.ui.View):
         match = await bot.db.get_match(match["match_id"])
 
         if dispute_count == 1:
-            # First dispute — warn, keep buttons active, send public message
+            # First dispute — warn, keep buttons, send public message
             try:
                 await interaction.message.edit(
                     content=(
@@ -590,46 +597,46 @@ class ConfirmResultView(discord.ui.View):
                 "⚠️ First dispute recorded. Dispute once more to escalate to staff.",
                 ephemeral=True,
             )
+
         else:
-            # Second dispute — remove buttons, ping staff
+            # Second dispute — remove buttons from confirm message, post to dispute channel
             try:
                 await interaction.message.edit(
                     content=(
                         f"🔴 {interaction.user.mention} has disputed this result a second time. "
-                        f"Staff have been notified."
+                        f"Staff are reviewing in the dispute channel."
                     ),
                     view=discord.ui.View(),  # remove buttons
                 )
             except Exception:
                 pass
 
-            staff_role_id  = os.getenv("STAFF_ROLE_ID")
-            staff_mention  = f"<@&{staff_role_id}>" if staff_role_id else "Staff"
             try:
                 await interaction.channel.send(
-                    f"🔴 {staff_mention} — Match **#{match['match_id']}** has been disputed twice. "
-                    f"A staff override is required."
+                    f"🔴 This match has been escalated to staff. "
+                    f"Staff are now reviewing the dispute in the designated channel."
                 )
             except Exception:
                 pass
 
-            # Update forum post to show StaffOverrideView
+            # Update forum post embed (no buttons) + post to dispute channel
             matches_cog = bot.get_cog("Matches")
             if matches_cog:
                 await matches_cog.update_forum_post(match)
+                await matches_cog.post_dispute_notice(match, interaction.guild, disputer=interaction.user)
 
             logger = _logger(interaction)
             if logger:
                 await logger.log_result_disputed(interaction.guild, match, interaction.user)
 
             await interaction.followup.send(
-                "🔴 Result disputed twice. Staff have been pinged to review this match.",
+                "🔴 Result disputed twice. Staff have been notified in the dispute channel.",
                 ephemeral=True,
             )
 
 
 class StaffOverrideView(discord.ui.View):
-    """Staff-only override button, shown on disputed matches."""
+    """Staff-only override button, shown in the dispute channel."""
 
     def __init__(self):
         super().__init__(timeout=None)
@@ -658,7 +665,7 @@ class StaffOverrideView(discord.ui.View):
 class StaffForfeitApprovalView(discord.ui.View):
     """
     Persistent staff buttons for approving/denying a forfeit request.
-    Uses _match_from_thread so it doesn't need state and survives restarts.
+    Posted in the dispute channel. Survives restarts via embed Match ID lookup.
     """
 
     def __init__(self):
@@ -701,32 +708,44 @@ class StaffForfeitApprovalView(discord.ui.View):
         if matches_cog:
             await matches_cog.finalise_match(match, interaction.guild, how="forfeit")
 
-        forfeiter_id    = match["forfeiter_id"]
-        forfeit_count   = await bot.db.get_player_forfeit_count(forfeiter_id)
-        repeat_warning  = (
-            f"\n⚠️ **Repeat offender alert** — <@{forfeiter_id}> has now forfeited **{forfeit_count}** time(s). "
+        forfeiter_id   = match["forfeiter_id"]
+        forfeit_count  = await bot.db.get_player_forfeit_count(forfeiter_id)
+        repeat_warning = (
+            f"\n⚠️ **Repeat offender** — <@{forfeiter_id}> has now forfeited **{forfeit_count}** time(s). "
             f"Consider reviewing for smurfing."
             if forfeit_count >= 2 else ""
         )
 
-        # Edit the staff notice to remove buttons
+        # Edit the dispute channel message to mark it handled
         try:
+            existing_embed = interaction.message.embeds[0] if interaction.message.embeds else None
+            if existing_embed:
+                existing_embed.colour = discord.Color.green()
+                existing_embed.set_footer(text=f"✅ Resolved by {interaction.user.display_name}")
             await interaction.message.edit(
-                content=f"✅ Forfeit approved by {interaction.user.mention}. Match resolved.",
+                content=(
+                    f"✅ **{interaction.user.display_name}** has resolved this case — "
+                    f"Forfeit approved for Match **#{match['match_id']}**."
+                    f"{repeat_warning}"
+                ),
+                embed=existing_embed,
                 view=discord.ui.View(),
             )
         except Exception:
             pass
 
-        # Public thread announcement
-        try:
-            await interaction.channel.send(
-                f"🏳️ Forfeit approved by staff. "
-                f"<@{forfeiter_id}> forfeits — <@{match['winner_id']}> wins!"
-                f"{repeat_warning}"
-            )
-        except Exception:
-            pass
+        # Public announcement in forum thread
+        if match["forum_thread_id"]:
+            try:
+                thread = bot.get_channel(int(match["forum_thread_id"])) or \
+                         await bot.fetch_channel(int(match["forum_thread_id"]))
+                await thread.send(
+                    f"🏳️ Forfeit approved by staff. "
+                    f"<@{forfeiter_id}> forfeits — <@{match['winner_id']}> wins!"
+                    f"{repeat_warning}"
+                )
+            except Exception:
+                pass
 
         logger = _logger(interaction)
         if logger:
@@ -770,23 +789,34 @@ class StaffForfeitApprovalView(discord.ui.View):
         if matches_cog:
             await matches_cog.update_forum_post(match)
 
-        # Edit staff notice to remove buttons
+        # Edit the dispute channel message to mark it handled
         try:
+            existing_embed = interaction.message.embeds[0] if interaction.message.embeds else None
+            if existing_embed:
+                existing_embed.colour = discord.Color.orange()
+                existing_embed.set_footer(text=f"❌ Denied by {interaction.user.display_name}")
             await interaction.message.edit(
-                content=f"❌ Forfeit denied by {interaction.user.mention}. Match continues.",
+                content=(
+                    f"❌ **{interaction.user.display_name}** has resolved this case — "
+                    f"Forfeit denied for Match **#{match['match_id']}**. The match continues."
+                ),
+                embed=existing_embed,
                 view=discord.ui.View(),
             )
         except Exception:
             pass
 
-        # Public thread announcement
-        try:
-            await interaction.channel.send(
-                f"❌ Forfeit request denied by staff. The match continues! "
-                f"<@{match['challenger_id']}> <@{match['opponent_id']}>"
-            )
-        except Exception:
-            pass
+        # Notify the forum thread
+        if match["forum_thread_id"]:
+            try:
+                thread = bot.get_channel(int(match["forum_thread_id"])) or \
+                         await bot.fetch_channel(int(match["forum_thread_id"]))
+                await thread.send(
+                    f"❌ Forfeit request denied by staff. The match continues! "
+                    f"<@{match['challenger_id']}> <@{match['opponent_id']}>"
+                )
+            except Exception:
+                pass
 
         await interaction.followup.send("❌ Forfeit denied.", ephemeral=True)
 
@@ -833,18 +863,56 @@ class LeaderboardView(discord.ui.View):
 # ============================================================
 
 async def _match_from_thread(bot, interaction: discord.Interaction):
-    """Look up the match associated with the current thread/channel."""
-    if interaction.channel is None:
-        return None
-    thread_id = str(interaction.channel.id)
-    async with bot.db._db.execute(
-        "SELECT * FROM matches WHERE forum_thread_id = ?", (thread_id,)
-    ) as cur:
-        return await cur.fetchone()
+    """
+    Look up the match for the current context.
+
+    Priority:
+    1. Match whose forum_thread_id = current channel id  (forum thread context)
+    2. Embed field "Match ID" on the interaction message  (dispute channel context)
+    """
+    if interaction.channel is not None:
+        thread_id = str(interaction.channel.id)
+        async with bot.db._db.execute(
+            "SELECT * FROM matches WHERE forum_thread_id = ?", (thread_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            if row:
+                return row
+
+    # Fallback: read Match ID from the embed on the message that triggered the interaction
+    if interaction.message and interaction.message.embeds:
+        for embed in interaction.message.embeds:
+            for field in embed.fields:
+                if field.name == "Match ID":
+                    match_id = field.value.lstrip("#").strip()
+                    return await bot.db.get_match(match_id)
+
+    return None
+
+
+async def _mark_dispute_handled(bot, match_id: str, text: str):
+    """
+    Edit the dispute-channel message for `match_id` to show it's been handled.
+    Silently does nothing if no dispute message was stored for this match.
+    """
+    info = await bot.db.get_dispute_message(match_id)
+    if info is None:
+        return
+    try:
+        ch = bot.get_channel(int(info["dispute_message_channel_id"]))
+        if ch is None:
+            ch = await bot.fetch_channel(int(info["dispute_message_channel_id"]))
+        msg = await ch.fetch_message(int(info["dispute_message_id"]))
+        existing_embed = msg.embeds[0] if msg.embeds else None
+        if existing_embed:
+            existing_embed.colour = discord.Color.green()
+            existing_embed.set_footer(text="✅ Case closed")
+        await msg.edit(content=text, embed=existing_embed, view=discord.ui.View())
+    except Exception as exc:
+        log.warning("Could not edit dispute channel message for match %s: %s", match_id, exc)
 
 
 def _is_staff(interaction: discord.Interaction) -> bool:
-    # Discord administrators are always treated as staff
     if interaction.user.guild_permissions.administrator:
         return True
     staff_role_id = os.getenv("STAFF_ROLE_ID")
