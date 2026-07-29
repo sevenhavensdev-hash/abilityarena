@@ -2,9 +2,14 @@
 cogs/staff.py
 
 Staff-only slash commands:
-  /override  — override a match result and apply Elo
-  /cancelm   — cancel any match
-  /forcepost — re-post the permanent challenge message
+  /override    — override a match result and apply Elo
+  /cancelm     — cancel any match
+  /forcepost   — re-post the permanent challenge message
+  /setelo      — manually set a player's Elo (admin only)
+  /resetwins   — reset a player's win count to 0
+  /resetlosses — reset a player's loss count to 0
+  /resetelo    — reset a player's Elo to 1200
+  /resetall    — reset a player's wins, losses, forfeit count, and Elo
 """
 
 from __future__ import annotations
@@ -30,10 +35,8 @@ def _is_staff(interaction: discord.Interaction) -> bool:
 
 
 def _is_admin(interaction: discord.Interaction) -> bool:
-    # Administrators are always admins
     if interaction.user.guild_permissions.administrator:
         return True
-    # Support both ADMIN_ROLE_IDS (comma-separated) and the old ADMIN_ROLE_ID (single)
     raw = os.getenv("ADMIN_ROLE_IDS") or os.getenv("ADMIN_ROLE_ID", "")
     admin_role_ids = {rid.strip() for rid in raw.split(",") if rid.strip()}
     if not admin_role_ids:
@@ -69,6 +72,14 @@ def admin_check():
 class Staff(commands.Cog, name="Staff"):
     def __init__(self, bot):
         self.bot = bot
+
+    # ------------------------------------------------------------------
+    # Shared log helper
+    # ------------------------------------------------------------------
+    async def _log(self, guild, title, fields, color=discord.Color.orange()):
+        logger = self.bot.get_cog("Logging")
+        if logger:
+            await logger.log_raw(guild, title=title, fields=fields, color=color)
 
     # ------------------------------------------------------------------
     @app_commands.command(
@@ -125,11 +136,26 @@ class Staff(commands.Cog, name="Staff"):
         if matches_cog:
             await matches_cog.finalise_match(match, interaction.guild, how="staff_override")
 
-        logger = self.bot.get_cog("Logging")
-        if logger:
-            await logger.log_staff_override(
-                interaction.guild, match, interaction.user, old_status
-            )
+        await self._log(
+            interaction.guild,
+            title="🔧 Staff Override",
+            fields=[
+                ("Match ID", f"#{match_id}", True),
+                ("Staff",    interaction.user.mention, True),
+                ("Previous Status", old_status, True),
+                ("Winner Set To", winner.mention, False),
+                ("Reason", reason, False),
+            ],
+        )
+
+        # Edit the dispute-channel message if one exists
+        from views import _mark_dispute_handled
+        await _mark_dispute_handled(
+            self.bot,
+            match_id,
+            f"✅ **{interaction.user.display_name}** has resolved this case — "
+            f"Match **#{match_id}** handled via `/override`.",
+        )
 
         await interaction.followup.send(
             f"✅ Match **#{match_id}** has been overridden. Winner: {winner.mention}",
@@ -160,20 +186,22 @@ class Staff(commands.Cog, name="Staff"):
             )
 
         await interaction.response.defer(ephemeral=True, thinking=True)
+        await self.bot.db.cancel_match(match_id, cancelled_by=str(interaction.user.id))
 
-        await self.bot.db.cancel_match(match_id)
+        match = await self.bot.db.get_match(match_id)
+        matches_cog = self.bot.get_cog("Matches")
+        if matches_cog:
+            await matches_cog.update_forum_post(match)
 
-        logger = self.bot.get_cog("Logging")
-        if logger:
-            await logger.log_raw(
-                interaction.guild,
-                title="❌ Match Cancelled",
-                fields=[
-                    ("Match ID", f"#{match_id}", True),
-                    ("Cancelled By", interaction.user.mention, True),
-                ],
-                color=discord.Color.red(),
-            )
+        await self._log(
+            interaction.guild,
+            title="⚫ Match Cancelled",
+            fields=[
+                ("Match ID",     f"#{match_id}",           True),
+                ("Cancelled By", interaction.user.mention, True),
+            ],
+            color=discord.Color.dark_gray(),
+        )
 
         await interaction.followup.send(
             f"✅ Match **#{match_id}** has been cancelled.", ephemeral=True
@@ -185,24 +213,19 @@ class Staff(commands.Cog, name="Staff"):
         description="[Staff] Re-post the permanent challenge message.",
     )
     @staff_check()
-    async def forcepost(
-        self,
-        interaction: discord.Interaction,
-    ):
+    async def forcepost(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         challenges_cog = self.bot.get_cog("Challenges")
         if challenges_cog:
             await challenges_cog.ensure_challenge_message()
-        await interaction.followup.send(
-            "✅ Challenge message re-posted.", ephemeral=True
-        )
+        await interaction.followup.send("✅ Challenge message re-posted.", ephemeral=True)
 
     # ------------------------------------------------------------------
     @app_commands.command(
         name="setelo",
         description="[Admin] Manually set a player's Elo rating.",
     )
-    @app_commands.describe(user="The Discord member", elo="The new Elo value")
+    @app_commands.describe(user="The Discord member", elo="The new Elo value (0–3000)")
     @admin_check()
     async def set_elo(
         self,
@@ -214,29 +237,158 @@ class Staff(commands.Cog, name="Staff"):
             return await interaction.response.send_message(
                 "❌ Elo must be between 0 and 3000.", ephemeral=True
             )
-        await self.bot.db.get_or_create_player(str(user.id))
-        async with self.bot.db._lock:
-            await self.bot.db._db.execute(
-                "UPDATE players SET elo = ? WHERE discord_id = ?",
-                (elo, str(user.id)),
-            )
-            await self.bot.db._db.commit()
+        await self.bot.db.reset_player_stats(str(user.id), elo=elo)
 
-        logger = self.bot.get_cog("Logging")
-        if logger:
-            await logger.log_raw(
-                interaction.guild,
-                title="🔧 Manual Elo Set",
-                fields=[
-                    ("Staff", interaction.user.mention, True),
-                    ("Player", user.mention, True),
-                    ("New Elo", str(elo), True),
-                ],
-                color=discord.Color.orange(),
-            )
-
+        await self._log(
+            interaction.guild,
+            title="🔧 Manual Elo Set",
+            fields=[
+                ("Staff",    interaction.user.mention, True),
+                ("Player",   user.mention,             True),
+                ("New Elo",  str(elo),                 True),
+            ],
+        )
         await interaction.response.send_message(
             f"✅ {user.mention}'s Elo set to **{elo}**.", ephemeral=True
+        )
+
+    # ------------------------------------------------------------------
+    # Reset commands
+    # ------------------------------------------------------------------
+
+    @app_commands.command(
+        name="resetwins",
+        description="[Staff] Reset a player's win count to 0.",
+    )
+    @app_commands.describe(user="The player whose wins you want to reset")
+    @staff_check()
+    async def reset_wins(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+    ):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        success = await self.bot.db.reset_player_stats(str(user.id), wins=0)
+        if not success:
+            return await interaction.followup.send(
+                "❌ Could not reset wins (player may not exist).", ephemeral=True
+            )
+
+        await self._log(
+            interaction.guild,
+            title="🔄 Wins Reset",
+            fields=[
+                ("Staff",  interaction.user.mention, True),
+                ("Player", user.mention,             True),
+                ("Wins reset to", "0",               True),
+            ],
+            color=discord.Color.blue(),
+        )
+        await interaction.followup.send(
+            f"✅ Reset {user.mention}'s wins to **0**.", ephemeral=True
+        )
+
+    # ------------------------------------------------------------------
+    @app_commands.command(
+        name="resetlosses",
+        description="[Staff] Reset a player's loss count to 0.",
+    )
+    @app_commands.describe(user="The player whose losses you want to reset")
+    @staff_check()
+    async def reset_losses(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+    ):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        success = await self.bot.db.reset_player_stats(str(user.id), losses=0)
+        if not success:
+            return await interaction.followup.send(
+                "❌ Could not reset losses (player may not exist).", ephemeral=True
+            )
+
+        await self._log(
+            interaction.guild,
+            title="🔄 Losses Reset",
+            fields=[
+                ("Staff",  interaction.user.mention, True),
+                ("Player", user.mention,             True),
+                ("Losses reset to", "0",             True),
+            ],
+            color=discord.Color.blue(),
+        )
+        await interaction.followup.send(
+            f"✅ Reset {user.mention}'s losses to **0**.", ephemeral=True
+        )
+
+    # ------------------------------------------------------------------
+    @app_commands.command(
+        name="resetelo",
+        description="[Staff] Reset a player's Elo rating to 1200.",
+    )
+    @app_commands.describe(user="The player whose Elo you want to reset")
+    @staff_check()
+    async def reset_elo(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+    ):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        success = await self.bot.db.reset_player_stats(str(user.id), elo=1200)
+        if not success:
+            return await interaction.followup.send(
+                "❌ Could not reset Elo (player may not exist).", ephemeral=True
+            )
+
+        await self._log(
+            interaction.guild,
+            title="🔄 Elo Reset",
+            fields=[
+                ("Staff",  interaction.user.mention, True),
+                ("Player", user.mention,             True),
+                ("Elo reset to", "1200",             True),
+            ],
+            color=discord.Color.blue(),
+        )
+        await interaction.followup.send(
+            f"✅ Reset {user.mention}'s Elo to **1200**.", ephemeral=True
+        )
+
+    # ------------------------------------------------------------------
+    @app_commands.command(
+        name="resetall",
+        description="[Staff] Reset a player's wins, losses, Elo, and forfeit count.",
+    )
+    @app_commands.describe(user="The player to fully reset")
+    @staff_check()
+    async def reset_all(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+    ):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        success = await self.bot.db.reset_player_stats(
+            str(user.id), wins=0, losses=0, elo=1200, forfeit_count=0
+        )
+        if not success:
+            return await interaction.followup.send(
+                "❌ Could not reset stats (player may not exist).", ephemeral=True
+            )
+
+        await self._log(
+            interaction.guild,
+            title="🔄 Full Stats Reset",
+            fields=[
+                ("Staff",          interaction.user.mention,           True),
+                ("Player",         user.mention,                       True),
+                ("Reset",          "Wins: 0 | Losses: 0 | Elo: 1200 | Forfeits: 0", False),
+            ],
+            color=discord.Color.blue(),
+        )
+        await interaction.followup.send(
+            f"✅ All stats reset for {user.mention} — Wins: **0**, Losses: **0**, "
+            f"Elo: **1200**, Forfeits: **0**.",
+            ephemeral=True,
         )
 
 
