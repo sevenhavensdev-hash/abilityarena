@@ -199,6 +199,52 @@ class Logging(commands.Cog, name="Logging"):
             color=discord.Color.orange(),
         )
 
+    async def log_forfeit_requested(
+        self,
+        guild: discord.Guild,
+        match: dict,
+        forfeiter: discord.Member,
+    ):
+        """Logged when a player voluntarily requests a forfeit."""
+        await self.log_raw(
+            guild,
+            title="🏳️ Forfeit Requested",
+            fields=[
+                ("Match ID", f"#{match['match_id']}", True),
+                ("Forfeiter", forfeiter.mention, True),
+                ("Opponent", f"<@{match['challenger_id'] if str(forfeiter.id) == match['opponent_id'] else match['opponent_id']}>", True),
+            ],
+            color=discord.Color.purple(),
+        )
+
+    async def log_forfeit_approved(
+        self,
+        guild: discord.Guild,
+        match: dict,
+        staff: discord.Member,
+        forfeit_count: int,
+    ):
+        """Logged when staff approves a forfeit (voluntary or auto)."""
+        fields = [
+            ("Match ID", f"#{match['match_id']}", True),
+            ("Approved By", staff.mention, True),
+            ("Forfeiter", f"<@{match['forfeiter_id']}>", True),
+            ("Winner", f"<@{match['winner_id']}> (**{match['winner_roblox']}**)", False),
+            ("Forfeiter's Total Forfeits", str(forfeit_count), True),
+        ]
+        if forfeit_count >= 2:
+            fields.append(
+                ("⚠️ Smurfing / Repeat Alert",
+                 f"<@{match['forfeiter_id']}> has forfeited {forfeit_count} time(s). Consider reviewing.",
+                 False)
+            )
+        await self.log_raw(
+            guild,
+            title="🏳️ Forfeit Approved",
+            fields=fields,
+            color=discord.Color.purple(),
+        )
+
 
 async def setup(bot):
     await bot.add_cog(Logging(bot))
