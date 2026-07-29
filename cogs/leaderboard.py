@@ -3,6 +3,10 @@ cogs/leaderboard.py
 
 Handles the paginated leaderboard.
 /leaderboard — sends or updates the leaderboard embed.
+
+The leaderboard always reads live data from the database, so any stat
+resets (via /resetwins, /resetlosses, /resetelo, /resetall) are
+automatically reflected the next time someone views or refreshes it.
 """
 
 from __future__ import annotations
@@ -50,7 +54,7 @@ class Leaderboard(commands.Cog, name="Leaderboard"):
         else:
             lines = []
             for i, row in enumerate(slice_):
-                rank = start + i + 1
+                rank    = start + i + 1
                 wins    = row["wins"]
                 losses  = row["losses"]
                 total   = wins + losses
