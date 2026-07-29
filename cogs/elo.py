@@ -63,10 +63,11 @@ class Elo(commands.Cog, name="Elo"):
                 msg = f"{target.display_name} has no rating yet."
             return await interaction.response.send_message(msg, ephemeral=True)
 
-        wins    = player["wins"]
-        losses  = player["losses"]
-        total   = wins + losses
-        winrate = round(wins / total * 100, 1) if total else 0.0
+        wins     = player["wins"]
+        losses   = player["losses"]
+        total    = wins + losses
+        winrate  = round(wins / total * 100, 1) if total else 0.0
+        forfeits = player["forfeit_count"] if "forfeit_count" in player.keys() else 0
 
         embed = discord.Embed(
             title=f"⚔️ {target.display_name}'s Rating",
@@ -77,6 +78,8 @@ class Elo(commands.Cog, name="Elo"):
         embed.add_field(name="Wins",     value=str(wins),           inline=True)
         embed.add_field(name="Losses",   value=str(losses),         inline=True)
         embed.add_field(name="Win Rate", value=f"{winrate}%",       inline=True)
+        if forfeits:
+            embed.add_field(name="Forfeits", value=str(forfeits),   inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
