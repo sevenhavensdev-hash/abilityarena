@@ -61,6 +61,23 @@ def _match_embed(match) -> discord.Embed:
         inline=True,
     )
     embed.add_field(name="Region", value=match["region"], inline=True)
+
+    # Show match mode and chosen ability if present
+    mode = match["match_mode"] if "match_mode" in match.keys() else "Fist Only"
+    mode_icons = {
+        "Fist Only":    "👊 Fist Only",
+        "Same Ability": "🤝 Same Ability",
+        "F2P Ability":  "🆓 F2P Ability",
+        "P2W Ability":  "💎 P2W Ability",
+    }
+    embed.add_field(name="Mode", value=mode_icons.get(mode, mode), inline=True)
+
+    chosen_ability = match["chosen_ability"] if "chosen_ability" in match.keys() else None
+    if chosen_ability:
+        embed.add_field(name="Chosen Ability", value=f"⚡ {chosen_ability}", inline=True)
+    elif mode != "Fist Only":
+        embed.add_field(name="Chosen Ability", value="🗳️ Voting in progress…", inline=True)
+
     embed.add_field(name="Status", value=status_label, inline=False)
 
     if status == "completed" and match["winner_id"]:
