@@ -39,6 +39,10 @@ class Database:
             "ALTER TABLE matches ADD COLUMN dispute_message_id TEXT",
             "ALTER TABLE matches ADD COLUMN dispute_message_channel_id TEXT",
             "ALTER TABLE players ADD COLUMN forfeit_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE matches ADD COLUMN match_mode TEXT NOT NULL DEFAULT 'Fist Only'",
+            "ALTER TABLE matches ADD COLUMN chosen_ability TEXT",
+            "ALTER TABLE matches ADD COLUMN challenger_ability_vote TEXT",
+            "ALTER TABLE matches ADD COLUMN opponent_ability_vote TEXT",
         ]
         for stmt in migrations:
             try:
@@ -226,14 +230,15 @@ class Database:
         challenger_roblox: str,
         opponent_roblox: str,
         region: str,
+        match_mode: str = "Fist Only",
     ) -> aiosqlite.Row:
         async with self._lock:
             await self._db.execute(
                 """
                 INSERT INTO matches
                     (match_id, challenger_id, opponent_id, challenger_roblox,
-                     opponent_roblox, region, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'awaiting', ?)
+                     opponent_roblox, region, status, match_mode, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'awaiting', ?, ?)
                 """,
                 (
                     match_id,
@@ -242,11 +247,55 @@ class Database:
                     challenger_roblox,
                     opponent_roblox,
                     region,
+                    match_mode,
                     self._now(),
                 ),
             )
             await self._db.commit()
         return await self.get_match(match_id)
+
+    async def set_ability_vote(
+        self,
+        match_id: str,
+        voter_id: str,
+        ability: str,
+        challenger_id: str,
+        opponent_id: str,
+    ) -> Optional[str]:
+        """
+        Record a player's ability vote. Returns the agreed ability name if both
+        players have now voted for the same ability, otherwise returns None.
+        """
+        async with self._lock:
+            if voter_id == challenger_id:
+                await self._db.execute(
+                    "UPDATE matches SET challenger_ability_vote = ? WHERE match_id = ?",
+                    (ability, match_id),
+                )
+            else:
+                await self._db.execute(
+                    "UPDATE matches SET opponent_ability_vote = ? WHERE match_id = ?",
+                    (ability, match_id),
+                )
+            await self._db.commit()
+
+        match = await self.get_match(match_id)
+        c_vote = match["challenger_ability_vote"]
+        o_vote = match["opponent_ability_vote"]
+
+        if c_vote and o_vote and c_vote == o_vote:
+            await self.update_match_chosen_ability(match_id, c_vote)
+            return c_vote
+        return None
+
+    async def update_match_chosen_ability(self, match_id: str, ability: str):
+        """Confirm and store the agreed ability for a match."""
+        async with self._lock:
+            await self._db.execute(
+                "UPDATE matches SET chosen_ability = ? WHERE match_id = ?",
+                (ability, match_id),
+            )
+            await self._db.commit()
 
     async def get_match(self, match_id: str) -> Optional[aiosqlite.Row]:
         async with self._db.execute(
