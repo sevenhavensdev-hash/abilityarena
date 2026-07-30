@@ -15,7 +15,15 @@ import logging
 import discord
 from discord.ext import commands
 
-from views import CreateChallengeView, ReportResultView, STATUS_LABELS
+from views import (
+    CreateChallengeView,
+    ReportResultView,
+    FreeAbilityVoteView,
+    P2WAbilityVoteView,
+    SameAbilityVoteView,
+    ABILITY_VOTE_MODES,
+    STATUS_LABELS,
+)
 
 log = logging.getLogger("cogs.challenges")
 
@@ -38,6 +46,16 @@ def _match_embed(match) -> discord.Embed:
         inline=True,
     )
     embed.add_field(name="Region", value=match["region"], inline=True)
+
+    mode = match["match_mode"] if "match_mode" in match.keys() else "Fist Only"
+    mode_icons = {
+        "Fist Only":    "👊 Fist Only",
+        "Same Ability": "🤝 Same Ability",
+        "F2P Ability":  "🆓 F2P Ability",
+        "P2W Ability":  "💎 P2W Ability",
+    }
+    embed.add_field(name="Mode", value=mode_icons.get(mode, mode), inline=True)
+
     embed.add_field(name="Status", value=status_label, inline=True)
     return embed
 
@@ -102,6 +120,7 @@ class Challenges(commands.Cog, name="Challenges"):
         opponent: discord.Member,
         opponent_roblox: str,
         region: str,
+        match_mode: str = "Fist Only",
     ):
         """
         Creates a match record and a forum thread.
@@ -115,6 +134,7 @@ class Challenges(commands.Cog, name="Challenges"):
             challenger_roblox=challenger_roblox,
             opponent_roblox=opponent_roblox,
             region=region,
+            match_mode=match_mode,
         )
 
         # Ensure both players have a profile
@@ -142,6 +162,11 @@ class Challenges(commands.Cog, name="Challenges"):
                         forum_message_id=str(first_msg.id),
                     )
                     match = await self.bot.db.get_match(match_id)
+
+                    # Post ability vote message for ability-based modes
+                    if match_mode in ABILITY_VOTE_MODES:
+                        await self._post_ability_vote(thread, match, interaction.user, opponent)
+
                 except Exception as exc:
                     log.exception("Failed to create forum thread: %s", exc)
 
@@ -151,6 +176,45 @@ class Challenges(commands.Cog, name="Challenges"):
             await logger.log_challenge_created(interaction.guild, match, interaction.user, opponent)
 
         return match
+
+    # ------------------------------------------------------------------
+    async def _post_ability_vote(
+        self,
+        thread: discord.Thread,
+        match,
+        challenger: discord.Member,
+        opponent: discord.Member,
+    ):
+        """Post the ability vote select menu in the forum thread."""
+        mode = match["match_mode"]
+        if mode == "F2P Ability":
+            view = FreeAbilityVoteView()
+            pool_desc = "**Free abilities** — pick the one you want to play:"
+        elif mode == "P2W Ability":
+            view = P2WAbilityVoteView()
+            pool_desc = "**Gamepass abilities** — pick the one you want to play:"
+        else:  # Same Ability
+            view = SameAbilityVoteView()
+            pool_desc = "**All abilities** — both players must vote for the same one:"
+
+        embed = discord.Embed(
+            title="🗳️ Ability Vote",
+            description=(
+                f"Mode: **{mode}**\n\n"
+                f"{pool_desc}\n\n"
+                f"Both players select their preferred ability below. "
+                f"When you both pick the **same** ability it will be locked in."
+            ),
+            color=discord.Color.blurple(),
+        )
+        try:
+            await thread.send(
+                content=f"{challenger.mention} {opponent.mention} — vote for your ability!",
+                embed=embed,
+                view=view,
+            )
+        except Exception as exc:
+            log.warning("Could not post ability vote message: %s", exc)
 
 
 async def setup(bot):
