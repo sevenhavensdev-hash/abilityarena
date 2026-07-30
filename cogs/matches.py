@@ -189,6 +189,7 @@ class Matches(commands.Cog, name="Matches"):
         Re-renders the forum post embed. For disputed and awaiting_forfeit
         matches the action buttons are now in the dispute channel, so the
         forum post shows the updated embed with no interactive buttons.
+        When a match is cancelled the forum thread is archived.
         """
         msg = await self._get_forum_message(match)
         if msg is None:
@@ -208,6 +209,16 @@ class Matches(commands.Cog, name="Matches"):
             await msg.edit(embed=embed, view=view)
         except Exception as exc:
             log.warning("Could not update forum message: %s", exc)
+
+        # Archive the forum thread when a match is cancelled
+        if status == "cancelled":
+            thread = await self._get_forum_thread(match)
+            if thread is not None:
+                try:
+                    await thread.edit(archived=True)
+                    log.info("Archived forum thread for cancelled match %s", match["match_id"])
+                except Exception as exc:
+                    log.warning("Could not archive forum thread for match %s: %s", match["match_id"], exc)
 
     # ------------------------------------------------------------------
     async def post_confirm_request(self, match, guild: discord.Guild):
