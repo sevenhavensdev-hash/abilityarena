@@ -19,6 +19,9 @@ from views import (
     StaffOverrideView,
     StaffForfeitApprovalView,
     LeaderboardView,
+    FreeAbilityVoteView,
+    P2WAbilityVoteView,
+    SameAbilityVoteView,
 )
 
 load_dotenv()
@@ -60,6 +63,9 @@ class DuelBot(commands.Bot):
         self.add_view(StaffOverrideView())
         self.add_view(StaffForfeitApprovalView())
         self.add_view(LeaderboardView())
+        self.add_view(FreeAbilityVoteView())
+        self.add_view(P2WAbilityVoteView())
+        self.add_view(SameAbilityVoteView())
 
         # Load all cogs
         cog_list = [
