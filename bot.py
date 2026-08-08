@@ -20,7 +20,7 @@ from views import (
     StaffForfeitApprovalView,
     LeaderboardView,
     FreeAbilityVoteView,
-    P2WAbilityVoteView,
+    GamepassesAbilityVoteView,
     SameAbilityVoteView,
 )
 
@@ -64,7 +64,7 @@ class DuelBot(commands.Bot):
         self.add_view(StaffForfeitApprovalView())
         self.add_view(LeaderboardView())
         self.add_view(FreeAbilityVoteView())
-        self.add_view(P2WAbilityVoteView())
+        self.add_view(GamepassesAbilityVoteView())
         self.add_view(SameAbilityVoteView())
 
         # Load all cogs
