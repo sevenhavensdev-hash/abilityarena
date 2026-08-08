@@ -28,8 +28,8 @@ REGIONS = ["Asia", "North America", "South America", "Europe", "Oceania", "Middl
 MATCH_MODES = {
     "Fist Only":    "👊 Fist Only — no abilities, just fists",
     "Same Ability": "🤝 Same Ability — both players use the same ability (vote below)",
-    "F2P Ability":  "🆓 F2P Ability — free abilities only (vote below)",
-    "P2W Ability":  "💎 P2W Ability — gamepass abilities only (vote below)",
+    "Free Ability":  "🆓 Free Ability — free abilities only (vote below)",
+    "Gamepasses Ability":  "💎 Gamepasses Ability — gamepass abilities only (vote below)",
 }
 
 FREE_ABILITIES = [
@@ -38,14 +38,14 @@ FREE_ABILITIES = [
     "Hero", "Retro", "Shadow", "Vampire", "Blue Fire",
 ]
 
-P2W_ABILITIES = [
+GAMEPASSES_ABILITIES = [
     "Cursed", "Space Outlaw", "Angelic", "One Punch", "Sorcerer",
 ]
 
-ALL_ABILITIES = FREE_ABILITIES + P2W_ABILITIES
+ALL_ABILITIES = FREE_ABILITIES + GAMEPASSES_ABILITIES
 
 # Modes that require an ability vote in the thread
-ABILITY_VOTE_MODES = {"Same Ability", "F2P Ability", "P2W Ability"}
+ABILITY_VOTE_MODES = {"Same Ability", "Free Ability", "Gamepasses Ability"}
 
 STATUS_LABELS = {
     "awaiting":          "🟡 Awaiting Match",
@@ -352,8 +352,8 @@ class ModeSelectView(discord.ui.View):
         options=[
             discord.SelectOption(label="👊 Fist Only",    value="Fist Only",    description="No abilities — fists only"),
             discord.SelectOption(label="🤝 Same Ability", value="Same Ability", description="Both players use the same ability (vote in thread)"),
-            discord.SelectOption(label="🆓 F2P Ability",  value="F2P Ability",  description="Free abilities only (vote in thread)"),
-            discord.SelectOption(label="💎 P2W Ability",  value="P2W Ability",  description="Gamepass abilities only (vote in thread)"),
+            discord.SelectOption(label="🆓 Free Ability",  value="Free Ability",  description="Free abilities only (vote in thread)"),
+            discord.SelectOption(label="💎 Gamepasses Ability",  value="Gamepasses Ability",  description="Gamepass abilities only (vote in thread)"),
         ],
     )
     async def mode_select(
@@ -936,7 +936,7 @@ async def _handle_ability_vote(
 
 
 class FreeAbilityVoteView(discord.ui.View):
-    """Persistent ability vote view for F2P Ability mode."""
+    """Persistent ability vote view for Free Ability mode."""
 
     def __init__(self):
         super().__init__(timeout=None)
@@ -950,16 +950,16 @@ class FreeAbilityVoteView(discord.ui.View):
         await _handle_ability_vote(interaction, select.values[0])
 
 
-class P2WAbilityVoteView(discord.ui.View):
-    """Persistent ability vote view for P2W Ability mode."""
+class GamepassesAbilityVoteView(discord.ui.View):
+    """Persistent ability vote view for Gamepasses Ability mode."""
 
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.select(
         placeholder="💎 Vote for a gamepass ability…",
-        custom_id="p2w_ability_vote_select",
-        options=[discord.SelectOption(label=a, value=a) for a in P2W_ABILITIES],
+        custom_id="gamepasses_ability_vote_select",
+        options=[discord.SelectOption(label=a, value=a) for a in GAMEPASSES_ABILITIES],
     )
     async def vote(self, interaction: discord.Interaction, select: discord.ui.Select):
         await _handle_ability_vote(interaction, select.values[0])
