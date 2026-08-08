@@ -19,7 +19,7 @@ from views import (
     CreateChallengeView,
     ReportResultView,
     FreeAbilityVoteView,
-    P2WAbilityVoteView,
+    GamepassesAbilityVoteView,
     SameAbilityVoteView,
     ABILITY_VOTE_MODES,
     STATUS_LABELS,
@@ -51,8 +51,8 @@ def _match_embed(match) -> discord.Embed:
     mode_icons = {
         "Fist Only":    "👊 Fist Only",
         "Same Ability": "🤝 Same Ability",
-        "F2P Ability":  "🆓 F2P Ability",
-        "P2W Ability":  "💎 P2W Ability",
+        "Free Ability":  "🆓 Free Ability",
+        "Gamepasses Ability":  "💎 Gamepasses Ability",
     }
     embed.add_field(name="Mode", value=mode_icons.get(mode, mode), inline=True)
 
@@ -187,11 +187,11 @@ class Challenges(commands.Cog, name="Challenges"):
     ):
         """Post the ability vote select menu in the forum thread."""
         mode = match["match_mode"]
-        if mode == "F2P Ability":
+        if mode == "Free Ability":
             view = FreeAbilityVoteView()
             pool_desc = "**Free abilities** — pick the one you want to play:"
-        elif mode == "P2W Ability":
-            view = P2WAbilityVoteView()
+        elif mode == "Gamepasses Ability":
+            view = GamepassesAbilityVoteView()
             pool_desc = "**Gamepass abilities** — pick the one you want to play:"
         else:  # Same Ability
             view = SameAbilityVoteView()
