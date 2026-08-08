@@ -67,8 +67,8 @@ def _match_embed(match) -> discord.Embed:
     mode_icons = {
         "Fist Only":    "👊 Fist Only",
         "Same Ability": "🤝 Same Ability",
-        "F2P Ability":  "🆓 F2P Ability",
-        "P2W Ability":  "💎 P2W Ability",
+        "Free Ability":  "🆓 Free Ability",
+        "Gamepasses Ability":  "💎 Gamepasses Ability",
     }
     embed.add_field(name="Mode", value=mode_icons.get(mode, mode), inline=True)
 
