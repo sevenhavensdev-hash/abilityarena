@@ -219,6 +219,17 @@ class Database:
             await self._db.commit()
         return True
 
+    async def reset_all_elo(self, elo: int = 1200) -> int:
+        """Reset every player's Elo and return the number of affected players."""
+        elo = min(3000, max(0, elo))
+        async with self._lock:
+            cursor = await self._db.execute(
+                "UPDATE players SET elo = ?",
+                (elo,),
+            )
+            await self._db.commit()
+            return cursor.rowcount
+
     # ------------------------------------------------------------------
     # Match methods
     # ------------------------------------------------------------------
