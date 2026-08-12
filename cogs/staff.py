@@ -6,6 +6,8 @@ Staff-only slash commands:
   /cancelm     — cancel any match
   /forcepost   — re-post the permanent challenge message
   /setelo      — manually set a player's Elo (admin only)
+  /editstats   — set a player's wins and losses (admin only)
+  /resetglobalelo — reset every player's Elo to 1200 (admin only)
   /resetwins   — reset a player's win count to 0
   /resetlosses — reset a player's loss count to 0
   /resetelo    — reset a player's Elo to 1200
@@ -250,6 +252,76 @@ class Staff(commands.Cog, name="Staff"):
         )
         await interaction.response.send_message(
             f"✅ {user.mention}'s Elo set to **{elo}**.", ephemeral=True
+        )
+
+    # ------------------------------------------------------------------
+    @app_commands.command(
+        name="editstats",
+        description="[Admin] Set a player's wins and losses.",
+    )
+    @app_commands.describe(
+        user="The Discord member",
+        wins="The player's new total wins",
+        losses="The player's new total losses",
+    )
+    @admin_check()
+    async def edit_stats(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+        wins: int,
+        losses: int,
+    ):
+        if wins < 0 or losses < 0:
+            return await interaction.response.send_message(
+                "❌ Wins and losses cannot be negative.", ephemeral=True
+            )
+
+        await self.bot.db.reset_player_stats(
+            str(user.id),
+            wins=wins,
+            losses=losses,
+        )
+
+        await self._log(
+            interaction.guild,
+            title="🔧 Player Stats Edited",
+            fields=[
+                ("Admin", interaction.user.mention, True),
+                ("Player", user.mention, True),
+                ("Wins", str(wins), True),
+                ("Losses", str(losses), True),
+            ],
+        )
+        await interaction.response.send_message(
+            f"✅ Updated {user.mention}'s stats — Wins: **{wins}**, Losses: **{losses}**.",
+            ephemeral=True,
+        )
+
+    # ------------------------------------------------------------------
+    @app_commands.command(
+        name="resetglobalelo",
+        description="[Admin] Reset every player's Elo to 1200.",
+    )
+    @admin_check()
+    async def reset_global_elo(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        affected_players = await self.bot.db.reset_all_elo()
+
+        await self._log(
+            interaction.guild,
+            title="🔄 Grand Elo Reset",
+            fields=[
+                ("Admin", interaction.user.mention, True),
+                ("Players Affected", str(affected_players), True),
+                ("New Elo", "1200", True),
+            ],
+            color=discord.Color.red(),
+        )
+        await interaction.followup.send(
+            f"✅ Grand Elo reset complete. Reset **{affected_players}** "
+            "player(s) to **1200 Elo**.",
+            ephemeral=True,
         )
 
     # ------------------------------------------------------------------
