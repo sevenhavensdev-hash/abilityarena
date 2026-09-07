@@ -101,7 +101,18 @@ class DuelBot(commands.Bot):
         )
         leaderboard = self.get_cog("Leaderboard")
         if leaderboard:
-            await leaderboard.ensure_leaderboard_message()
+            ensure_leaderboard = getattr(
+                leaderboard,
+                "ensure_leaderboard_message",
+                None,
+            )
+            if ensure_leaderboard is None:
+                log.error(
+                    "Loaded Leaderboard cog is missing ensure_leaderboard_message; "
+                    "redeploy all bot source files together."
+                )
+            else:
+                await ensure_leaderboard()
 
         # on_ready fires on every reconnect; only run first-time setup once
         if self._ready_fired:
