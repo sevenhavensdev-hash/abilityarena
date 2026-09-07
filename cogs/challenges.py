@@ -13,6 +13,7 @@ import uuid
 import logging
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from views import (
@@ -22,10 +23,21 @@ from views import (
     GamepassesAbilityVoteView,
     SameAbilityVoteView,
     ABILITY_VOTE_MODES,
+    MATCH_MODES,
+    REGIONS,
     STATUS_LABELS,
 )
 
 log = logging.getLogger("cogs.challenges")
+
+MATCH_MODE_CHOICES = [
+    app_commands.Choice(name=label.split(" — ", 1)[0], value=value)
+    for value, label in MATCH_MODES.items()
+]
+REGION_CHOICES = [
+    app_commands.Choice(name=region, value=region)
+    for region in REGIONS
+]
 
 
 def _match_embed(match) -> discord.Embed:
@@ -65,6 +77,77 @@ class Challenges(commands.Cog, name="Challenges"):
         self.bot = bot
 
     # ------------------------------------------------------------------
+    @app_commands.command(
+        name="challenge",
+        description="Challenge another player to a ranked duel.",
+    )
+    @app_commands.describe(
+        opponent="The Discord member you want to challenge",
+        challenger_roblox="Your Roblox username",
+        opponent_roblox="The opponent's Roblox username",
+        region="The region for this match",
+        match_mode="The rules for this match",
+    )
+    @app_commands.choices(
+        region=REGION_CHOICES,
+        match_mode=MATCH_MODE_CHOICES,
+    )
+    async def challenge(
+        self,
+        interaction: discord.Interaction,
+        opponent: discord.Member,
+        challenger_roblox: str,
+        opponent_roblox: str,
+        region: app_commands.Choice[str],
+        match_mode: app_commands.Choice[str],
+    ):
+        """Create a challenge directly from a slash command."""
+        if opponent.bot:
+            return await interaction.response.send_message(
+                "❌ You cannot challenge a bot.", ephemeral=True
+            )
+        if opponent.id == interaction.user.id:
+            return await interaction.response.send_message(
+                "❌ You cannot challenge yourself.", ephemeral=True
+            )
+
+        has_active = await self.bot.db.has_active_match(
+            str(interaction.user.id), str(opponent.id)
+        )
+        if has_active:
+            return await interaction.response.send_message(
+                "❌ You already have an active match against this opponent. "
+                "Resolve it before creating a new challenge.",
+                ephemeral=True,
+            )
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        match = await self.create_challenge(
+            interaction=interaction,
+            challenger_roblox=challenger_roblox.strip(),
+            opponent=opponent,
+            opponent_roblox=opponent_roblox.strip(),
+            region=region.value,
+            match_mode=match_mode.value,
+        )
+        if match is None:
+            return await interaction.followup.send(
+                "❌ Failed to create challenge. Please try again.", ephemeral=True
+            )
+
+        thread_link = (
+            f"\n📌 View your match: <#{match['forum_thread_id']}>"
+            if match["forum_thread_id"]
+            else ""
+        )
+        await interaction.followup.send(
+            f"✅ Challenge created! Match ID: **#{match['match_id']}**\n"
+            f"A forum post has been created and {opponent.mention} has been notified."
+            f"{thread_link}",
+            ephemeral=True,
+        )
+
+    # ------------------------------------------------------------------
     async def ensure_challenge_message(self):
         """
         Checks the database for a stored challenge message ID.
@@ -98,6 +181,8 @@ class Challenges(commands.Cog, name="Challenges"):
             title="⚔️ Want a Competitive Duel?",
             description=(
                 "Click the button below to challenge another player to a ranked duel.\n\n"
+                "You can also use **/challenge** to select the opponent directly "
+                "from Discord.\n\n"
                 "You will need:\n"
                 "• Your Roblox username\n"
                 "• Your opponent's Roblox username\n"
