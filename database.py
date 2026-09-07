@@ -164,7 +164,50 @@ class Database:
 
     async def get_leaderboard(self, limit: int = 100) -> list:
         async with self._db.execute(
-            "SELECT * FROM players ORDER BY elo DESC LIMIT ?", (limit,)
+            """
+            SELECT * FROM players
+            ORDER BY elo DESC, wins DESC, losses ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ) as cur:
+            return await cur.fetchall()
+
+    async def get_record_leaderboard(
+        self,
+        region: Optional[str] = None,
+        since: Optional[int] = None,
+        limit: int = 100,
+    ) -> list:
+        """Return rankings built from completed match records."""
+        conditions = ["m.status = 'completed'"]
+        values: list = []
+
+        if region is not None:
+            conditions.append("m.region = ?")
+            values.append(region)
+        if since is not None:
+            conditions.append("m.completed_at >= ?")
+            values.append(since)
+
+        values.append(limit)
+        where_clause = " AND ".join(conditions)
+        async with self._db.execute(
+            f"""
+            SELECT
+                p.discord_id,
+                p.elo,
+                SUM(CASE WHEN m.winner_id = p.discord_id THEN 1 ELSE 0 END) AS wins,
+                SUM(CASE WHEN m.loser_id = p.discord_id THEN 1 ELSE 0 END) AS losses
+            FROM players p
+            INNER JOIN matches m
+                ON (m.winner_id = p.discord_id OR m.loser_id = p.discord_id)
+            WHERE {where_clause}
+            GROUP BY p.discord_id, p.elo
+            ORDER BY wins DESC, losses ASC, p.elo DESC
+            LIMIT ?
+            """,
+            values,
         ) as cur:
             return await cur.fetchall()
 
