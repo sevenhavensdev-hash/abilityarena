@@ -981,40 +981,180 @@ class SameAbilityVoteView(discord.ui.View):
 
 
 class LeaderboardView(discord.ui.View):
-    """Pagination buttons for the leaderboard."""
+    """Persistent public leaderboard controls."""
 
     def __init__(self):
         super().__init__(timeout=None)
 
+    async def _open_category(self, interaction: discord.Interaction, category: str):
+        lb_cog = interaction.client.get_cog("Leaderboard")
+        if lb_cog:
+            await lb_cog.open_category(interaction, category)
+
+    @discord.ui.button(
+        label="Overall",
+        style=discord.ButtonStyle.primary,
+        custom_id="leaderboard_category_overall",
+        row=0,
+    )
+    async def overall(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._open_category(interaction, "overall")
+
+    @discord.ui.button(
+        label="Regional",
+        style=discord.ButtonStyle.secondary,
+        custom_id="leaderboard_category_regional",
+        row=0,
+    )
+    async def regional(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._open_category(interaction, "regional")
+
+    @discord.ui.button(
+        label="Weekly",
+        style=discord.ButtonStyle.secondary,
+        custom_id="leaderboard_category_weekly",
+        row=0,
+    )
+    async def weekly(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._open_category(interaction, "weekly")
+
+    @discord.ui.button(
+        label="Monthly",
+        style=discord.ButtonStyle.secondary,
+        custom_id="leaderboard_category_monthly",
+        row=0,
+    )
+    async def monthly(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._open_category(interaction, "monthly")
+
+    @discord.ui.button(
+        label="All Time",
+        style=discord.ButtonStyle.secondary,
+        custom_id="leaderboard_category_all_time",
+        row=0,
+    )
+    async def all_time(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._open_category(interaction, "all_time")
+
+
+class LeaderboardPersonalView(discord.ui.View):
+    """Per-user leaderboard controls shown in an ephemeral message."""
+
+    def __init__(
+        self,
+        category: str = "overall",
+        region: str | None = None,
+        page: int = 0,
+        total_pages: int = 1,
+    ):
+        # Private panels are temporary interaction views, not persistent bot views.
+        super().__init__(timeout=900)
+        self.category = category
+        self.region = region
+        self.page = page
+        self.total_pages = total_pages
+
+    async def _change_category(self, interaction: discord.Interaction, category: str):
+        lb_cog = interaction.client.get_cog("Leaderboard")
+        if lb_cog:
+            await lb_cog.change_personal_category(interaction, category)
+
+    async def _paginate(self, interaction: discord.Interaction, direction: int):
+        lb_cog = interaction.client.get_cog("Leaderboard")
+        if lb_cog:
+            await lb_cog.paginate_personal(interaction, self, direction)
+
+    @discord.ui.button(
+        label="Overall",
+        style=discord.ButtonStyle.primary,
+        custom_id="leaderboard_personal_overall",
+        row=0,
+    )
+    async def overall(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._change_category(interaction, "overall")
+
+    @discord.ui.button(
+        label="Regional",
+        style=discord.ButtonStyle.secondary,
+        custom_id="leaderboard_personal_regional",
+        row=0,
+    )
+    async def regional(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._change_category(interaction, "regional")
+
+    @discord.ui.button(
+        label="Weekly",
+        style=discord.ButtonStyle.secondary,
+        custom_id="leaderboard_personal_weekly",
+        row=0,
+    )
+    async def weekly(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._change_category(interaction, "weekly")
+
+    @discord.ui.button(
+        label="Monthly",
+        style=discord.ButtonStyle.secondary,
+        custom_id="leaderboard_personal_monthly",
+        row=0,
+    )
+    async def monthly(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._change_category(interaction, "monthly")
+
+    @discord.ui.button(
+        label="All Time",
+        style=discord.ButtonStyle.secondary,
+        custom_id="leaderboard_personal_all_time",
+        row=0,
+    )
+    async def all_time(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._change_category(interaction, "all_time")
+
     @discord.ui.button(
         label="◀ Previous",
         style=discord.ButtonStyle.secondary,
-        custom_id="leaderboard_prev",
+        custom_id="leaderboard_personal_prev",
+        row=1,
     )
-    async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        lb_cog = interaction.client.get_cog("Leaderboard")
-        if lb_cog:
-            await lb_cog.paginate(interaction, direction=-1)
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._paginate(interaction, -1)
 
     @discord.ui.button(
         label="Next ▶",
         style=discord.ButtonStyle.secondary,
-        custom_id="leaderboard_next",
+        custom_id="leaderboard_personal_next",
+        row=1,
     )
     async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        lb_cog = interaction.client.get_cog("Leaderboard")
-        if lb_cog:
-            await lb_cog.paginate(interaction, direction=1)
+        await self._paginate(interaction, 1)
 
     @discord.ui.button(
-        label="🔄 Refresh",
+        label="Refresh",
         style=discord.ButtonStyle.primary,
-        custom_id="leaderboard_refresh",
+        custom_id="leaderboard_personal_refresh",
+        row=1,
     )
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._paginate(interaction, 0)
+
+
+class RegionalLeaderboardView(discord.ui.View):
+    """Per-user region picker for the regional leaderboard."""
+
+    def __init__(self):
+        super().__init__(timeout=120)
+
+    @discord.ui.select(
+        placeholder="Choose a region…",
+        custom_id="leaderboard_region_select",
+        options=[discord.SelectOption(label=region, value=region) for region in REGIONS],
+        row=0,
+    )
+    async def region_select(
+        self, interaction: discord.Interaction, select: discord.ui.Select
+    ):
         lb_cog = interaction.client.get_cog("Leaderboard")
         if lb_cog:
-            await lb_cog.paginate(interaction, direction=0)
+            await lb_cog.show_regional(interaction, select.values[0])
 
 
 # ============================================================
