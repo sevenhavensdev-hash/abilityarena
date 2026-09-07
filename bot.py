@@ -99,6 +99,10 @@ class DuelBot(commands.Bot):
                 name="⚔️ Competitive Duels",
             )
         )
+        leaderboard = self.get_cog("Leaderboard")
+        if leaderboard:
+            await leaderboard.ensure_leaderboard_message()
+
         # on_ready fires on every reconnect; only run first-time setup once
         if self._ready_fired:
             log.info("on_ready fired again (reconnect) — skipping challenge message setup.")
